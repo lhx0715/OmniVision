@@ -528,12 +528,12 @@ function resolveProfile(query: string, entityType: EntityType): EntityProfile {
 
 /**
  * 生成情报卡片
- * @returns { cards: 5 张卡片的数组, sources: 数据源列表（mock 模式为空） }
+ * @returns { cards: 5 张卡片的数组, sources: 数据源列表（mock 模式为空）, images: 图片 URL 列表（mock 不产生图片） }
  */
 export async function generateIntelCards(
   query: string,
   entityType: EntityType,
-): Promise<{ cards: IntelCard[]; sources: IntelSource[] }> {
+): Promise<{ cards: IntelCard[]; sources: IntelSource[]; images: string[] }> {
   // 模拟推理延迟（不在此处控制流式间隔，仅模拟生成耗时）
   await new Promise((resolve) => setTimeout(resolve, 100))
 
@@ -548,5 +548,5 @@ export async function generateIntelCards(
     { cardType: 'gameplay', payload: profile.gameplay },
   ]
 
-  return { cards, sources: [] }
+  return { cards, sources: [], images: [] }
 }

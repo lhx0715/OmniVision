@@ -18,6 +18,7 @@ import AchievementsCard from './cards/AchievementsCard';
 import DarksideCard from './cards/DarksideCard';
 import GameplayCard from './cards/GameplayCard';
 import TrendCard from './cards/TrendCard';
+import GalleryCard from './cards/GalleryCard';
 
 const DISPLAY_ORDER: CardType[] = [
   'verdict',
@@ -91,8 +92,12 @@ export default function BentoGrid({
   const phase = useOmniVisionStore((s) => s.phase);
   const focusedCardIndex = useOmniVisionStore((s) => s.focusedCardIndex);
   const viewMode = useOmniVisionStore((s) => s.viewMode);
+  const images = useOmniVisionStore((s) => s.images);
 
   const cards = cardsOverride ?? storeCards;
+
+  // 影像档案仅在主实体视图（非对比覆盖）且结果阶段展示
+  const showGallery = !cardsOverride && phase === 'results' && images.length > 0;
 
   const isStreaming = (type: CardType): boolean => {
     if (streamingOverride) return streamingOverride.includes(type);
@@ -147,6 +152,16 @@ export default function BentoGrid({
           </div>
         );
       })}
+
+      {/* 影像档案 — 独立于 CardType 的图片网格，放在 gameplay 之后 */}
+      {showGallery && (
+        <div
+          className="relative min-h-[180px] md:col-span-3 animate-fade-in"
+          data-card-type="gallery"
+        >
+          <GalleryCard images={images} />
+        </div>
+      )}
     </div>
   );
 }

@@ -58,6 +58,8 @@ interface OmniVisionStore {
   engineMode: EngineMode;
   // C4 数据源溯源
   sources: IntelSource[];
+  // 影像档案 — Tavily 返回的图片 URL 列表（独立 SSE 事件推送）
+  images: string[];
 
   // C1 双实体对比模式
   compareMode: boolean;
@@ -95,6 +97,7 @@ interface OmniVisionStore {
   setError: (msg: string | null) => void;
   setEngineMode: (mode: EngineMode) => void;
   setSources: (sources: IntelSource[]) => void;
+  setImages: (images: string[]) => void;
   clearCards: () => void;
   reset: () => void;
   setArchiveOpen: (open: boolean) => void;
@@ -139,6 +142,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
   error: null,
   engineMode: null,
   sources: [],
+  images: [],
 
   compareMode: false,
   compareQueryA: '',
@@ -172,6 +176,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
   setError: (msg) => set({ error: msg }),
   setEngineMode: (mode) => set({ engineMode: mode }),
   setSources: (sources) => set({ sources }),
+  setImages: (images) => set({ images }),
   clearCards: () =>
     set({
       cards: {},
@@ -181,6 +186,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       asks: {},
       focusedTimelineIndex: null,
       sources: [],
+      images: [],
       compareMode: false,
       compareQueryA: '',
       compareQueryB: '',
@@ -202,6 +208,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       error: null,
       engineMode: null,
       sources: [],
+      images: [],
       compareMode: false,
       compareQueryA: '',
       compareQueryB: '',

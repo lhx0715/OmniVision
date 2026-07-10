@@ -20,6 +20,7 @@ interface SSEEvent {
   entityType?: EntityType;
   message?: string;
   sources?: IntelSource[];
+  images?: string[];
   chunk?: string;
 }
 
@@ -66,6 +67,12 @@ function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
   if (evt.sources) {
     if (target === 'A') store.setSources(evt.sources);
     else store.setSourcesB(evt.sources);
+    return;
+  }
+
+  // 影像档案 — Tavily 返回的图片 URL 列表（仅主实体推送，对比模式不展示 gallery）
+  if (evt.images) {
+    store.setImages(evt.images);
     return;
   }
 

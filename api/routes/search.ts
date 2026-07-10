@@ -37,7 +37,7 @@ function sleep(ms: number): Promise<void> {
 async function generateCards(
   query: string,
   entityType: EntityType,
-): Promise<{ cards: IntelCard[]; sources: IntelSource[] }> {
+): Promise<{ cards: IntelCard[]; sources: IntelSource[]; images: string[] }> {
   if (hasLLM()) {
     return llmGenerate(query, entityType)
   }
@@ -109,15 +109,20 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }, 2000)
 
   try {
-    const { cards, sources } = await generateCards(query, finalType)
+    const { cards, sources, images } = await generateCards(query, finalType)
 
-    console.log(`[search] 生成完成: ${cards.length} 张卡片, ${sources.length} 个来源, closed=${closed}`)
+    console.log(`[search] 生成完成: ${cards.length} 张卡片, ${sources.length} 个来源, ${images.length} 张图片, closed=${closed}`)
 
     clearInterval(heartbeat)
 
     // 推送数据源列表（C4 溯源，在卡片之前）
     if (!closed && sources.length > 0) {
       safeWrite({ sources })
+    }
+
+    // 推送图片列表（在 sources 之后、卡片循环之前）
+    if (!closed && images.length > 0) {
+      safeWrite({ images })
     }
 
     for (const card of cards) {
@@ -141,10 +146,14 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     if (hasLLM()) {
       console.warn('[search] LLM 引擎失败，降级到 mockEngine:', message)
       try {
-        const { cards: fallbackCards, sources: fallbackSources } = await mockGenerate(query, finalType)
+        const { cards: fallbackCards, sources: fallbackSources, images: fallbackImages } = await mockGenerate(query, finalType)
         // 降级时也推送数据源（mock 模式通常为空）
         if (!closed && fallbackSources.length > 0) {
           safeWrite({ sources: fallbackSources })
+        }
+        // 降级路径也推送图片事件（mock 返回空数组，此处实际不会推送）
+        if (!closed && fallbackImages.length > 0) {
+          safeWrite({ images: fallbackImages })
         }
         for (const card of fallbackCards) {
           if (closed) break

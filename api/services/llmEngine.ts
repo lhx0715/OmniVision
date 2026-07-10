@@ -181,14 +181,16 @@ interface TavilyResult {
 /** 搜索来源（与 IntelSource 结构一致） */
 type TavilySource = { title: string; url: string }
 
-/** 搜索返回结构：拼接上下文 + 来源列表 */
+/** 搜索返回结构：拼接上下文 + 来源列表 + 图片 URL 列表 */
 interface SearchResult {
   context: string
   sources: IntelSource[]
+  images: string[]
 }
 
 /**
  * Tavily 搜索 — 自带 AI 摘要，适合 RAG 场景
+ * 通过 include_images 获取相关图片 URL
  */
 async function searchWithTavily(query: string): Promise<SearchResult> {
   const { TAVILY_API_KEY } = cfg()
@@ -200,6 +202,8 @@ async function searchWithTavily(query: string): Promise<SearchResult> {
       query,
       max_results: 8,
       include_answer: true,
+      include_images: true,
+      include_image_descriptions: false,
       search_depth: 'advanced',
     }),
   })
@@ -213,9 +217,15 @@ async function searchWithTavily(query: string): Promise<SearchResult> {
     .map((r) => `[${r.title}]\n${r.content}`)
     .join('\n\n---\n\n')
   const sources: TavilySource[] = results.map((r) => ({ title: r.title, url: r.url }))
+  // Tavily 返回 data.images: string[]（图片 URL 数组），提取前 12 张
+  const rawImages: unknown = data.images
+  const images: string[] = Array.isArray(rawImages)
+    ? rawImages.filter((u): u is string => typeof u === 'string').slice(0, 12)
+    : []
   return {
     context: answer ? `AI摘要: ${answer}\n\n详细资料:\n${context}` : context,
     sources,
+    images,
   }
 }
 
@@ -250,7 +260,8 @@ async function searchWithSerper(query: string): Promise<SearchResult> {
     parts.push(`[${r.title}]\n${r.snippet ?? ''}`)
     if (r.title && r.link) sources.push({ title: r.title, url: r.link })
   }
-  return { context: parts.join('\n\n---\n\n'), sources }
+  // Serper 不支持图片搜索
+  return { context: parts.join('\n\n---\n\n'), sources, images: [] }
 }
 
 /**
@@ -260,7 +271,7 @@ async function searchWeb(query: string): Promise<SearchResult> {
   const { TAVILY_API_KEY, SERPER_API_KEY } = cfg()
   if (TAVILY_API_KEY) {
     const result = await searchWithTavily(query)
-    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${result.sources.length} 个来源`)
+    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${result.sources.length} 个来源, ${result.images.length} 张图片`)
     return result
   }
   if (SERPER_API_KEY) {
@@ -268,7 +279,7 @@ async function searchWeb(query: string): Promise<SearchResult> {
     console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${result.sources.length} 个来源`)
     return result
   }
-  return { context: '', sources: [] }
+  return { context: '', sources: [], images: [] }
 }
 
 // ===== LLM 结构化生成 =====
@@ -659,21 +670,23 @@ export async function classifyIntentWithLLM(query: string): Promise<EntityType |
  * 生成情报卡片
  * 1. 并发搜索全网最新资讯
  * 2. LLM 结构化生成 5 张卡片
- * @returns { cards: 5 张卡片, sources: 数据源列表 }
+ * @returns { cards: 5 张卡片, sources: 数据源列表, images: 图片 URL 列表 }
  */
 export async function generateIntelCards(
   query: string,
   entityType: EntityType,
-): Promise<{ cards: IntelCard[]; sources: IntelSource[] }> {
+): Promise<{ cards: IntelCard[]; sources: IntelSource[]; images: string[] }> {
   console.log(`[llmEngine] 开始生成: query=${query}, type=${entityType}`)
 
   // ① 实时搜索（与 LLM 生成可并行，但搜索结果需喂给 LLM，所以先搜索）
   let searchContext = ''
   let sources: IntelSource[] = []
+  let images: string[] = []
   try {
     const searchResult = await searchWeb(query)
     searchContext = searchResult.context
     sources = searchResult.sources
+    images = searchResult.images
   } catch (err) {
     // 搜索失败不阻断，LLM 仍可基于自身知识生成
     console.warn('[llmEngine] 搜索失败，回退到 LLM 知识库:', (err as Error).message)
@@ -682,5 +695,5 @@ export async function generateIntelCards(
   // ② LLM 结构化生成
   const cards = await generateWithLLM(query, entityType, searchContext)
 
-  return { cards, sources }
+  return { cards, sources, images }
 }
