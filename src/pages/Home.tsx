@@ -15,6 +15,7 @@ import ArchiveDrawer from '@/components/ArchiveDrawer';
 import ExportButton from '@/components/ExportButton';
 import BackgroundFX from '@/components/BackgroundFX';
 import StreamingIndicator from '@/components/StreamingIndicator';
+import ArchiveUnsealTransition from '@/components/ArchiveUnsealTransition';
 import { saveArchiveEntry } from '@/lib/archive';
 import { detectCompare } from '@/lib/compare';
 import type { ClarifyOption, EntityType } from '@/types';
@@ -70,19 +71,23 @@ export default function Home() {
   const compareMode = useOmniVisionStore((s) => s.compareMode);
   const { start, startCompare } = useSSE();
   useKeyboardNav();
+  const [transitioning, setTransitioning] = useState(false);
 
   const handleSubmit = (q: string) => {
     setQuery(q);
+    const wasIdle = phase === 'idle';
     // C1 对比模式检测
     const compare = detectCompare(q);
     if (compare.isCompare) {
       const et = useOmniVisionStore.getState().entityType;
       useOmniVisionStore.getState().pushHistory(q, et);
+      if (wasIdle) setTransitioning(true);
       startCompare(compare.queryA, compare.queryB);
       return;
     }
     const et = useOmniVisionStore.getState().entityType;
     useOmniVisionStore.getState().pushHistory(q, et);
+    if (wasIdle) setTransitioning(true);
     start(q, et ?? undefined);
   };
 
@@ -204,7 +209,7 @@ export default function Home() {
       <main className="relative z-10 flex-1 flex flex-col">
         {!isActive ? (
           /* ===== 静止态：居中搜索框 + 雷达扫描 + BlurText 大标题 ===== */
-          <div className="flex-1 flex flex-col items-center justify-center gap-8 px-4 -mt-8 relative">
+          <div className="flex-1 flex flex-col items-center justify-center gap-8 px-4 relative">
             {/* 雷达背景装饰 */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-40">
               <div className="w-[420px] h-[420px] max-w-[80vw] max-h-[80vw]">
@@ -212,15 +217,34 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="relative text-center">
-              <BlurText
-                text="全知视野 OmniVision"
-                delay={40}
-                animateBy="letters"
-                className="text-5xl md:text-7xl font-black font-sans leading-none gradient-text justify-center"
-                stepDuration={0.5}
-              />
-              <p className="mt-5 text-zinc-500 font-mono text-[11px] md:text-xs tracking-[0.3em] uppercase animate-fade-in" style={{ animationDelay: '0.8s', opacity: 0 }}>
+            <div className="relative text-center z-10">
+              <div className="flex items-center justify-center gap-4 mb-6 animate-fade-in" style={{ animationDelay: '0.2s', opacity: 0 }}>
+                <span className="h-px w-16 md:w-24 bg-gradient-to-r from-transparent to-emerald-500/40" />
+                <span className="text-[10px] md:text-xs font-mono tracking-[0.5em] text-emerald-500/50 uppercase">OmniVision</span>
+                <span className="h-px w-16 md:w-24 bg-gradient-to-l from-transparent to-emerald-500/40" />
+              </div>
+              <div className="relative inline-block">
+                <div className="text-5xl md:text-8xl lg:text-9xl font-black font-sans tracking-tight text-white">
+                  {['全', '知', '视', '界'].map((char, i) => (
+                    <span
+                      key={i}
+                      className="inline-block relative"
+                      style={{
+                        animation: `title-reveal 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards, title-pulse 4s ease-in-out infinite`,
+                        animationDelay: `${0.15 + i * 0.15}s, ${2 + i * 0.2}s`,
+                        opacity: 0,
+                        textShadow: '0 0 30px rgba(110,231,183,0.4), 0 0 60px rgba(16,185,129,0.2)',
+                      }}
+                    >
+                      <span className="relative z-10">{char}</span>
+                      <span className="absolute inset-0 text-rose-500/60 -z-10 select-none" style={{ transform: 'translateX(-1.5px)', animation: `glitch-chroma-r 4s ease-in-out infinite`, animationDelay: `${2 + i * 0.2}s`, opacity: 0 }} aria-hidden="true">{char}</span>
+                      <span className="absolute inset-0 text-cyan-500/60 -z-10 select-none" style={{ transform: 'translateX(1.5px)', animation: `glitch-chroma-c 4s ease-in-out infinite`, animationDelay: `${2 + i * 0.2}s`, opacity: 0 }} aria-hidden="true">{char}</span>
+                    </span>
+                  ))}
+                </div>
+                <div className="absolute -inset-4 blur-3xl bg-emerald-500/20 -z-10" />
+              </div>
+              <p className="mt-8 text-zinc-500 font-mono text-[11px] md:text-xs tracking-[0.3em] uppercase animate-fade-in" style={{ animationDelay: '0.8s', opacity: 0 }}>
                 Dashboard over Chat · 看板即答案 · 拒绝废话
               </p>
             </div>
@@ -305,6 +329,16 @@ export default function Home() {
 
       {/* C2 历史档案抽屉 */}
       <ArchiveDrawer onSelect={handleArchiveSelect} />
+
+      {/* 机密档案解封过渡动画 */}
+      {transitioning && (
+        <ArchiveUnsealTransition
+          query={query}
+          fileNo={fileNo}
+          phase={phase}
+          onComplete={() => setTransitioning(false)}
+        />
+      )}
     </div>
   );
 }

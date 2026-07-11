@@ -203,6 +203,62 @@ body::before {
 /* BlurText */
 .blur-text { display: inline-flex; flex-wrap: wrap; }
 
+/* 标题入场动画 */
+@keyframes title-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(30px) scale(0.9);
+    filter: blur(10px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-5px) scale(1.02);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.title-letter {
+  background: linear-gradient(135deg, #ffffff 0%, #a5f3fc 50%, #6ee7b7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 60px rgba(16, 185, 129, 0.3);
+}
+
+@keyframes title-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.9;
+    filter: brightness(1.1);
+  }
+}
+
+@keyframes glitch-chroma-r {
+  0%, 100% { opacity: 0; transform: translateX(-1.5px); }
+  92% { opacity: 0; transform: translateX(-1.5px); }
+  93% { opacity: 0.6; transform: translateX(-2px); }
+  94% { opacity: 0; transform: translateX(-1px); }
+  96% { opacity: 0.4; transform: translateX(-2.5px); }
+  97% { opacity: 0; transform: translateX(-1.5px); }
+}
+
+@keyframes glitch-chroma-c {
+  0%, 100% { opacity: 0; transform: translateX(1.5px); }
+  92.5% { opacity: 0; transform: translateX(1.5px); }
+  93.5% { opacity: 0.6; transform: translateX(2.5px); }
+  94.5% { opacity: 0; transform: translateX(1px); }
+  96.5% { opacity: 0.4; transform: translateX(2px); }
+  97.5% { opacity: 0; transform: translateX(1.5px); }
+}
+
 /* ===== 脉冲点 ===== */
 .pulse-dot {
   position: relative;
@@ -293,6 +349,331 @@ body::before {
 }
 .animate-card-pulse {
   animation: card-pulse 2s ease-in-out infinite;
+}
+
+/* ===== 机密档案解封过渡动画 ===== */
+
+/* 遮罩淡入 */
+@keyframes archive-overlay-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.archive-overlay-in {
+  animation: archive-overlay-in 400ms ease-out forwards;
+}
+
+/* 档案封面缩放进入 */
+@keyframes archive-cover-in {
+  0% { transform: scale(0.85) translateY(20px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.archive-cover-in {
+  animation: archive-cover-in 600ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* 印章砸下 */
+@keyframes archive-stamp-in {
+  0% { transform: scale(4) rotate(-45deg); opacity: 0; }
+  50% { transform: scale(0.85) rotate(-10deg); opacity: 1; }
+  65% { transform: scale(1.15) rotate(-20deg); }
+  80% { transform: scale(0.95) rotate(-13deg); }
+  100% { transform: scale(1) rotate(-15deg); opacity: 0.8; }
+}
+.archive-stamp-in {
+  animation: archive-stamp-in 600ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* 屏幕震动 */
+@keyframes screen-shake {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-4px, 2px); }
+  20% { transform: translate(4px, -2px); }
+  30% { transform: translate(-3px, -3px); }
+  40% { transform: translate(3px, 3px); }
+  50% { transform: translate(-4px, 1px); }
+  60% { transform: translate(4px, -1px); }
+  70% { transform: translate(-2px, 2px); }
+  80% { transform: translate(2px, -2px); }
+  90% { transform: translate(-2px, 1px); }
+}
+.animate-screen-shake {
+  animation: screen-shake 400ms ease-out;
+}
+
+/* 撕裂：上半部向上滑出 */
+@keyframes archive-tear-top {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-100%); }
+}
+.archive-tear-top {
+  animation: archive-tear-top 800ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+/* 撕裂：下半部向下滑出 */
+@keyframes archive-tear-bottom {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(100%); }
+}
+.archive-tear-bottom {
+  animation: archive-tear-bottom 800ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+/* 撕裂光线 */
+@keyframes archive-tear-glow {
+  0% { opacity: 0; transform: scaleX(0); }
+  20% { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(1.5); }
+}
+.archive-tear-glow {
+  animation: archive-tear-glow 800ms ease-out forwards;
+}
+
+/* ===== 全屏爆发动画 ===== */
+@keyframes burst-particle {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx, 100px), var(--ty, 100px)) scale(0);
+  }
+}
+
+@keyframes archive-burst-bg {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+.archive-burst-bg {
+  animation: archive-burst-bg 800ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+@keyframes archive-burst-flash {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.archive-burst-flash {
+  animation: archive-burst-flash 600ms ease-out forwards;
+}
+
+@keyframes archive-burst-text {
+  0% {
+    opacity: 0;
+    transform: scale(0) rotate(-10deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2) rotate(2deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5) rotate(5deg);
+  }
+}
+.archive-burst-text {
+  animation: archive-burst-text 800ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+/* ===== 档案翻页动画 ===== */
+.archive-book {
+  perspective: 1500px;
+}
+
+.archive-page-left,
+.archive-page-right {
+  backface-visibility: hidden;
+  transform-origin: left center;
+}
+
+.archive-page-right {
+  transform-origin: right center;
+}
+
+@keyframes archive-flip-out-left {
+  0% {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateY(-180deg);
+    opacity: 0;
+  }
+}
+.archive-flip-out-left {
+  animation: archive-flip-out-left 0.4s ease-in-out forwards;
+}
+
+@keyframes archive-flip-in-right {
+  0% {
+    transform: rotateY(180deg);
+    opacity: 0;
+  }
+  100% {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+}
+.archive-flip-in-right {
+  animation: archive-flip-in-right 0.4s ease-in-out forwards;
+}
+
+@keyframes archive-flip-out-right {
+  0% {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateY(180deg);
+    opacity: 0;
+  }
+}
+.archive-flip-out-right {
+  animation: archive-flip-out-right 0.4s ease-in-out forwards;
+}
+
+@keyframes archive-flip-in-left {
+  0% {
+    transform: rotateY(-180deg);
+    opacity: 0;
+  }
+  100% {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+}
+.archive-flip-in-left {
+  animation: archive-flip-in-left 0.4s ease-in-out forwards;
+}
+
+@keyframes archive-file-reveal {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.archive-file-reveal {
+  animation: archive-file-reveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes archive-seal-stamp {
+  0% {
+    transform: scale(2) rotate(-15deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(0.9) rotate(-5deg);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1.05) rotate(-8deg);
+  }
+  100% {
+    transform: scale(1) rotate(-10deg);
+    opacity: 1;
+  }
+}
+.archive-seal-stamp {
+  animation: archive-seal-stamp 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes archive-panel-flash {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.archive-panel-flash {
+  animation: archive-panel-flash 0.6s ease-out forwards;
+}
+
+@keyframes panel-slide-up {
+  0% {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+}
+
+/* ===== 档案库搜索动画 ===== */
+@keyframes archive-search-card {
+  0% {
+    transform: translateY(20px) scale(0.95);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.archive-search-card {
+  animation: archive-search-card 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes archive-result-in {
+  0% {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.archive-result-in {
+  animation: archive-result-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes archive-stamp-bounce {
+  0% {
+    transform: scale(2.5) rotate(-15deg);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(0.92) rotate(-5deg);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1.05) rotate(-8deg);
+  }
+  100% {
+    transform: scale(1) rotate(-6deg);
+    opacity: 1;
+  }
+}
+.archive-stamp-bounce {
+  animation: archive-stamp-bounce 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.archive-file-stack {
+  perspective: 1000px;
 }
 
 @layer base {
