@@ -64,6 +64,14 @@ export default function ArchiveUnsealTransition({ query, fileNo, phase, onComple
   }, [progress, phase]);
 
   useEffect(() => {
+    if (phase === 'clarifying') {
+      setFadingOut(true);
+      const t = setTimeout(() => handleComplete(), 400);
+      return () => clearTimeout(t);
+    }
+  }, [phase, handleComplete]);
+
+  useEffect(() => {
     if (showResult) {
       const t1 = setTimeout(() => setStamped(true), 500);
       const t2 = setTimeout(() => {

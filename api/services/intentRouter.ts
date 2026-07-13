@@ -4,7 +4,7 @@
  * - LLM 零样本分类做兜底（需要配置 API key）
  */
 import type { EntityType, ClarifyOption } from '../../shared/types.js'
-import { hasLLM, classifyIntentWithLLM } from './llmEngine.js'
+import { hasLLM, classifyIntentWithLLM, clarifyOptionsWithLLM } from './llmEngine.js'
 
 // 已知人物名（含中英文及别名）
 const KNOWN_HUMANS = [
@@ -119,11 +119,13 @@ export function getClarifyOptions(query: string): ClarifyOption[] {
         label: '苹果公司 / iPhone 等产品',
         entityType: 'ITEM',
         description: '指苹果公司及其硬件、软件、生态系统产品',
+        searchQuery: 'Apple Inc. 苹果公司 iPhone',
       },
       {
         label: '与乔布斯相关的传奇人物',
         entityType: 'HUMAN',
         description: '指苹果创始人史蒂夫·乔布斯本人',
+        searchQuery: 'Steve Jobs 史蒂夫·乔布斯',
       },
     ]
   }
@@ -133,11 +135,13 @@ export function getClarifyOptions(query: string): ClarifyOption[] {
         label: '亚马逊公司 / AWS',
         entityType: 'ITEM',
         description: '指亚马逊电商平台与 AWS 云服务',
+        searchQuery: 'Amazon 亚马逊公司 AWS',
       },
       {
         label: '贝佐斯其人',
         entityType: 'HUMAN',
         description: '指亚马逊创始人杰夫·贝佐斯',
+        searchQuery: 'Jeff Bezos 杰夫·贝佐斯',
       },
     ]
   }
@@ -147,11 +151,13 @@ export function getClarifyOptions(query: string): ClarifyOption[] {
         label: '阿里巴巴 / 淘宝天猫',
         entityType: 'ITEM',
         description: '指阿里巴巴集团及其电商、云计算产品',
+        searchQuery: 'Alibaba 阿里巴巴集团',
       },
       {
         label: '马云其人',
         entityType: 'HUMAN',
         description: '指阿里巴巴创始人马云',
+        searchQuery: 'Jack Ma 马云',
       },
     ]
   }
@@ -161,11 +167,45 @@ export function getClarifyOptions(query: string): ClarifyOption[] {
         label: 'Meta 公司 / Facebook',
         entityType: 'ITEM',
         description: '指 Meta 公司及其社交产品矩阵',
+        searchQuery: 'Meta 公司 Facebook',
       },
       {
         label: '元宇宙浪潮',
         entityType: 'EVENT',
         description: '指元宇宙这一技术与产业现象',
+        searchQuery: '元宇宙 metaverse',
+      },
+    ]
+  }
+  if (q.includes('小米')) {
+    return [
+      {
+        label: '小米公司 / 小米手机',
+        entityType: 'ITEM',
+        description: '指小米集团及其手机、IoT 生态产品',
+        searchQuery: 'Xiaomi 小米公司 手机',
+      },
+      {
+        label: '雷军其人',
+        entityType: 'HUMAN',
+        description: '指小米创始人雷军',
+        searchQuery: '雷军 Lei Jun',
+      },
+    ]
+  }
+  if (q.includes('锤子')) {
+    return [
+      {
+        label: '锤子科技 / 罗永浩',
+        entityType: 'HUMAN',
+        description: '指锤子科技创始人罗永浩',
+        searchQuery: '罗永浩 锤子科技',
+      },
+      {
+        label: '锤子（工具）',
+        entityType: 'ITEM',
+        description: '指锤子这种工具',
+        searchQuery: '锤子 工具 hammer',
       },
     ]
   }
@@ -188,6 +228,26 @@ export function getClarifyOptions(query: string): ClarifyOption[] {
       description: '查询对象是某个产品、技术或物品',
     },
   ]
+}
+
+/**
+ * 异步获取澄清选项（LLM 优先，失败回退到关键词规则）
+ */
+export async function getClarifyOptionsAsync(query: string): Promise<ClarifyOption[]> {
+  if (hasLLM()) {
+    try {
+      const result = await clarifyOptionsWithLLM(query)
+      if (result && result.isAmbiguous && result.options.length >= 2) {
+        return result.options
+      }
+      if (result && !result.isAmbiguous) {
+        return []
+      }
+    } catch (err) {
+      console.warn('[intentRouter] LLM 消歧失败，回退到规则:', (err as Error).message)
+    }
+  }
+  return getClarifyOptions(query)
 }
 
 /**

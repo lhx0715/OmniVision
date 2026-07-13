@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, useEffect } from 'react';
 import { Search, ArrowRight, Terminal } from 'lucide-react';
 import { useOmniVisionStore } from '@/store/omnivision';
 import { cn } from '@/lib/utils';
@@ -19,6 +19,10 @@ export default function SearchBar({ active, onSubmit }: SearchBarProps) {
   const storedQuery = useOmniVisionStore((s) => s.query);
   const [value, setValue] = useState(storedQuery);
   const entityType = useOmniVisionStore((s) => s.entityType);
+
+  useEffect(() => {
+    setValue(storedQuery);
+  }, [storedQuery]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();

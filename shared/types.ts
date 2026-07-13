@@ -94,6 +94,7 @@ export interface ClarifyOption {
   label: string;
   entityType: EntityType;
   description: string;
+  searchQuery?: string;
 }
 
 export interface ClarifyResponse {

@@ -8,7 +8,7 @@
  */
 import { Router, type Request, type Response } from 'express'
 import type { EntityType, SearchRequest, IntelCard, IntelSource } from '../../shared/types.js'
-import { classifyIntentAsync, getClarifyOptions } from '../services/intentRouter.js'
+import { classifyIntentAsync, getClarifyOptionsAsync } from '../services/intentRouter.js'
 import { hasLLM } from '../services/llmEngine.js'
 import { generateIntelCards as mockGenerate } from '../services/mockEngine.js'
 import { generateIntelCards as llmGenerate } from '../services/llmEngine.js'
@@ -74,7 +74,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     finalType = await classifyIntentAsync(query)
     // 模糊 → 通过 SSE 推送澄清选项
     if (!finalType) {
-      res.write(`data: ${JSON.stringify({ needsClarify: true, options: getClarifyOptions(query) })}\n\n`)
+      const options = await getClarifyOptionsAsync(query)
+      res.write(`data: ${JSON.stringify({ needsClarify: true, options })}\n\n`)
       res.end()
       return
     }

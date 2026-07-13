@@ -661,7 +661,88 @@ export async function classifyIntentWithLLM(query: string): Promise<EntityType |
   if (raw.includes('HUMAN')) return 'HUMAN'
   if (raw.includes('EVENT')) return 'EVENT'
   if (raw.includes('ITEM')) return 'ITEM'
-  return null // AMBIGUOUS 或无法识别
+  return null
+}
+
+/**
+ * 用 LLM 生成消歧选项
+ * 当查询有歧义时，让 LLM 列出 2-4 个最可能的含义
+ */
+export async function clarifyOptionsWithLLM(query: string): Promise<{
+  isAmbiguous: boolean
+  options: { label: string; entityType: EntityType; description: string }[]
+} | null> {
+  const { LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_ROUTER_MODEL } = cfg()
+  const routerModel = LLM_ROUTER_MODEL || LLM_MODEL
+
+  const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${LLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: routerModel,
+      messages: [
+        {
+          role: 'system',
+          content: `你是歧义识别与消歧助手。
+分析用户查询，判断是否存在歧义（一词多义、指代不明等）。
+
+输出严格 JSON 格式：
+{
+  "isAmbiguous": true/false,
+  "options": [
+    {
+      "label": "选项名称（简洁明确）",
+      "entityType": "HUMAN/EVENT/ITEM",
+      "description": "一句话描述这个含义",
+      "searchQuery": "实际搜索时使用的精确关键词"
+    }
+  ]
+}
+
+规则：
+- 有歧义时 isAmbiguous=true，options 给 2-4 个最可能的含义
+- 没有歧义时 isAmbiguous=false，options 为空数组
+- entityType 只能是 HUMAN（人物）、EVENT（事件/现象）、ITEM（产品/技术/物件）之一
+- searchQuery 非常重要：必须是适合搜索引擎的精确关键词，优先使用英文+中文组合，确保能搜到正确类型的内容和图片
+- 例如：苹果公司 → "Apple Inc. 苹果公司 iPhone"，乔布斯 → "Steve Jobs 史蒂夫·乔布斯"
+- 不要输出任何额外文字，只输出 JSON`,
+        },
+        { role: 'user', content: query },
+      ],
+      temperature: 0.3,
+      max_tokens: 400,
+      response_format: { type: 'json_object' },
+    }),
+  })
+
+  if (!res.ok) return null
+
+  try {
+    const data = await res.json()
+    const content = data.choices?.[0]?.message?.content ?? ''
+    const parsed = JSON.parse(content)
+    if (parsed && Array.isArray(parsed.options)) {
+      return {
+        isAmbiguous: Boolean(parsed.isAmbiguous),
+        options: parsed.options
+          .filter((o: { label?: string; entityType?: string }) =>
+            o.label && ['HUMAN', 'EVENT', 'ITEM'].includes(o.entityType ?? ''),
+          )
+          .map((o: { label: string; entityType: EntityType; description?: string; searchQuery?: string }) => ({
+            label: o.label,
+            entityType: o.entityType,
+            description: o.description ?? '',
+            searchQuery: o.searchQuery ?? o.label,
+          })),
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 // ===== 主入口（接口签名与 mockEngine 完全一致）=====

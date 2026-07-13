@@ -114,8 +114,11 @@ export default function Home() {
   };
 
   const handleClarify = (opt: ClarifyOption) => {
+    const searchQ = opt.searchQuery ?? opt.label;
+    setQuery(searchQ);
     setEntityType(opt.entityType);
-    start(useOmniVisionStore.getState().query, opt.entityType);
+    useOmniVisionStore.getState().pushHistory(searchQ, opt.entityType);
+    start(searchQ, opt.entityType);
   };
 
   const handleReset = () => {
