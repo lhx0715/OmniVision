@@ -6,6 +6,7 @@ import type {
   EntityType,
   ClarifyOption,
   IntelSource,
+  SourceStats,
 } from '@/types';
 
 interface SSEEvent {
@@ -14,6 +15,9 @@ interface SSEEvent {
   needsClarify?: boolean;
   done?: boolean;
   error?: boolean;
+  blocked?: boolean;
+  reason?: string;
+  layer?: 'dict' | 'llm';
   options?: ClarifyOption[];
   cardType?: CardType;
   payload?: CardData;
@@ -21,7 +25,24 @@ interface SSEEvent {
   message?: string;
   sources?: IntelSource[];
   images?: string[];
+  // PRD-01 M3：信源构成统计
+  source_stats?: SourceStats;
   chunk?: string;
+  // Agent 进度事件
+  step?: number;
+  maxSteps?: number;
+  thought?: string;
+  stage?: 'thinking' | 'searching' | 'observing' | 'finalizing';
+  searchQuery?: string;
+  searchFocus?: string;
+  quality?: 'sufficient' | 'partial' | 'insufficient';
+  gaps?: string[];
+  newSources?: { title: string; url: string }[];
+  newFacts?: { content: string; category: string }[];
+  coveredDimensions?: string[];
+  sourcesCount?: number;
+  factsCount?: number;
+  bySource?: Record<string, number>;
 }
 
 /** 从单条 SSE 事件的原始文本中提取并解析 JSON 数据 */
@@ -55,6 +76,8 @@ function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
 
   const evt = parsed as unknown as SSEEvent;
   const store = useOmniVisionStore.getState();
+  // 守卫：已进入拦截结果态后，丢弃后续残留 SSE 事件（如对比模式另一侧的流）
+  if (store.phase === 'blocked') return;
   const inCompare = store.compareMode;
 
   // 引擎模式标识（live = 大模型实时搜索 / mock = 本地知识库）
@@ -63,10 +86,61 @@ function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
     return;
   }
 
+  // Agent 进度事件 — ReAct 多轮研究的每一步
+  // 前端过渡动画据此动态更新进度条，不再写死
+  // 对比模式 B 路忽略：全屏载体只跟 A 路，避免双路 timeline 互相覆盖
+  if (evt.type === 'agent_step' && typeof evt.step === 'number' && typeof evt.maxSteps === 'number') {
+    if (target === 'B') return;
+    store.setAgentProgress({
+      step: evt.step,
+      maxSteps: evt.maxSteps,
+      thought: evt.thought ?? '',
+      stage: evt.stage,
+      searchQuery: evt.searchQuery,
+      searchFocus: evt.searchFocus,
+      quality: evt.quality,
+      gaps: evt.gaps,
+      newSources: evt.newSources,
+      newFacts: evt.newFacts,
+      coveredDimensions: evt.coveredDimensions,
+      sourcesCount: evt.sourcesCount,
+      factsCount: evt.factsCount,
+      bySource: evt.bySource,
+      timestamp: Date.now(),
+    });
+    return;
+  }
+
+  // 风控拦截 — 命中本地字典或 LLM 快审，统一导向 blocked 结果态（P0）
+  // 保留输入框文字（query 不清空），渲染 BlockedView 档案查封页，提供明确退出路径
+  if (evt.blocked === true) {
+    const s = useOmniVisionStore.getState();
+    s.setBlockInfo({
+      reason: evt.reason ?? '输入内容包含敏感或受限主题，请修改后重试',
+      layer: evt.layer ?? 'llm',
+      query: s.query,
+      inCompare: s.compareMode,
+      compareSide: s.compareMode ? target : undefined,
+      timestamp: Date.now(),
+    });
+    s.setStreamingCards([]);
+    s.setStreamingCardsB([]);
+    s.setCompareMode(false);
+    s.resetAgentTimeline();
+    s.setPhase('blocked');
+    return;
+  }
+
   // C4 数据源溯源
   if (evt.sources) {
     if (target === 'A') store.setSources(evt.sources);
     else store.setSourcesB(evt.sources);
+    return;
+  }
+
+  // PRD-01 M3：信源构成统计（深度感知展示）
+  if (evt.source_stats) {
+    if (target === 'A') store.setSourceStats(evt.source_stats);
     return;
   }
 
@@ -111,8 +185,12 @@ function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
 
   if (evt.type === 'error' || evt.error === true) {
     store.setError(evt.message ?? '未知错误');
-    if (target === 'A') store.setStreamingCards([]);
-    else store.setStreamingCardsB([]);
+    if (target === 'A') {
+      store.setStreamingCards([]);
+      store.resetAgentTimeline();
+    } else {
+      store.setStreamingCardsB([]);
+    }
     if (!inCompare) {
       store.setPhase('idle');
     }
@@ -183,6 +261,8 @@ export function useSSE() {
     store.setCompareMode(false);
     store.setPhase('searching');
     store.setStreamingCards([...ALL_CARD_TYPES]);
+    store.resetAgentTimeline();
+    store.setSourceStats(null);
 
     let buffer = '';
 
@@ -267,6 +347,7 @@ export function useSSE() {
     store.setPhase('searching');
     store.setStreamingCards([...ALL_CARD_TYPES]);
     store.setStreamingCardsB([...ALL_CARD_TYPES]);
+    store.setAgentProgress(null);
 
     try {
       // 并发发起两个搜索请求
@@ -302,8 +383,13 @@ export function useSSE() {
         readSSEStream(resB, 'B'),
       ]);
 
-      // 两个搜索都完成后，生成对比摘要
+      // 某一侧被风控拦截 → 已进入 blocked 结果态，短路跳过对比摘要生成
       const state = useOmniVisionStore.getState();
+      if (state.phase === 'blocked') {
+        return;
+      }
+
+      // 两个搜索都完成后，生成对比摘要
       if (
         Object.keys(state.cards).length > 0 ||
         Object.keys(state.cardsB).length > 0
@@ -322,6 +408,7 @@ export function useSSE() {
       s.setError((err as Error).message ?? '网络异常');
       s.setStreamingCards([]);
       s.setStreamingCardsB([]);
+      s.resetAgentTimeline();
       s.setPhase('idle');
     } finally {
       completedRef.current = true;

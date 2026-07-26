@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { Radar, AlertCircle, X, Fingerprint, Crosshair, Archive } from 'lucide-react';
+import { Radar, AlertCircle, X, Fingerprint, Crosshair, Archive, BookMarked, LogOut, ChevronRight, Network } from 'lucide-react';
 import { useOmniVisionStore } from '@/store/omnivision';
+import { useAuthStore } from '@/store/auth';
 import { useSSE } from '@/hooks/useSSE';
 import { useKeyboardNav } from '@/hooks/useKeyboardNav';
 import SearchBar from '@/components/SearchBar';
@@ -16,8 +17,12 @@ import ExportButton from '@/components/ExportButton';
 import BackgroundFX from '@/components/BackgroundFX';
 import StreamingIndicator from '@/components/StreamingIndicator';
 import ArchiveUnsealTransition from '@/components/ArchiveUnsealTransition';
+import RiskToast from '@/components/RiskToast';
+import BlockedView from '@/components/BlockedView';
+import AuthDialog from '@/components/AuthDialog';
 import { saveArchiveEntry } from '@/lib/archive';
 import { detectCompare } from '@/lib/compare';
+import { localDictCheck } from '../../shared/riskDict';
 import type { ClarifyOption, EntityType } from '@/types';
 
 /** 雷达扫描装饰 SVG */
@@ -63,21 +68,79 @@ export default function Home() {
   const phase = useOmniVisionStore((s) => s.phase);
   const error = useOmniVisionStore((s) => s.error);
   const query = useOmniVisionStore((s) => s.query);
+  const blockInfo = useOmniVisionStore((s) => s.blockInfo);
+  const agentProgress = useOmniVisionStore((s) => s.agentProgress);
+  const agentTimeline = useOmniVisionStore((s) => s.agentTimeline);
   const engineMode = useOmniVisionStore((s) => s.engineMode);
   const setQuery = useOmniVisionStore((s) => s.setQuery);
   const setEntityType = useOmniVisionStore((s) => s.setEntityType);
   const setError = useOmniVisionStore((s) => s.setError);
   const setArchiveOpen = useOmniVisionStore((s) => s.setArchiveOpen);
   const compareMode = useOmniVisionStore((s) => s.compareMode);
+
+  // 认证状态
+  const authUser = useAuthStore((s) => s.user);
+  const restoreSession = useAuthStore((s) => s.restoreSession);
+  const logout = useAuthStore((s) => s.logout);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // 启动时恢复会话
+  useEffect(() => {
+    restoreSession();
+  }, [restoreSession]);
+
+  // 监听收藏按钮的登录引导事件
+  useEffect(() => {
+    const handler = () => setAuthOpen(true);
+    window.addEventListener('omnivision:auth-required', handler);
+    return () => window.removeEventListener('omnivision:auth-required', handler);
+  }, []);
+
   const { start, startCompare } = useSSE();
   useKeyboardNav();
   const [transitioning, setTransitioning] = useState(false);
 
   const handleSubmit = (q: string) => {
+    // 前端本地字典前置预检（<5ms，零网络消耗）
+    // 命中显性违规词 → 统一导向 blocked 结果态（BlockedView），不发起任何 API 请求，输入框文字保留
+    const compare = detectCompare(q);
+    if (compare.isCompare) {
+      const checkA = localDictCheck(compare.queryA);
+      const checkB = localDictCheck(compare.queryB);
+      if (checkA.blocked || checkB.blocked) {
+        const hit = checkA.blocked ? checkA : checkB;
+        setQuery(q);
+        useOmniVisionStore.getState().setBlockInfo({
+          reason: hit.reason,
+          layer: 'frontend',
+          query: checkA.blocked ? compare.queryA : compare.queryB,
+          inCompare: true,
+          compareSide: checkA.blocked ? 'A' : 'B',
+          timestamp: Date.now(),
+        });
+        useOmniVisionStore.getState().setPhase('blocked');
+        return;
+      }
+    } else {
+      const riskCheck = localDictCheck(q);
+      if (riskCheck.blocked) {
+        setQuery(q);
+        useOmniVisionStore.getState().setBlockInfo({
+          reason: riskCheck.reason,
+          layer: 'frontend',
+          query: q,
+          inCompare: false,
+          timestamp: Date.now(),
+        });
+        useOmniVisionStore.getState().setPhase('blocked');
+        return;
+      }
+    }
+
     setQuery(q);
     const wasIdle = phase === 'idle';
     // C1 对比模式检测
-    const compare = detectCompare(q);
     if (compare.isCompare) {
       const et = useOmniVisionStore.getState().entityType;
       useOmniVisionStore.getState().pushHistory(q, et);
@@ -160,6 +223,8 @@ export default function Home() {
     <div className="relative min-h-screen flex flex-col text-zinc-200 bg-gradient-to-tr from-zinc-950 via-neutral-950 to-zinc-900">
       {/* A1 全局背景动效 */}
       <BackgroundFX />
+      {/* 风控拦截 Toast */}
+      <RiskToast />
       {/* 网格线背景 */}
       <div className="grid-lines pointer-events-none fixed inset-0 z-0" />
 
@@ -193,8 +258,38 @@ export default function Home() {
         <div className="flex items-center gap-3 text-[10px] font-mono tracking-widest text-zinc-600 uppercase">
           <div className="hidden sm:flex items-center gap-1.5">
             <Fingerprint className="h-3 w-3" />
-            <span>机密档案 · v0.1</span>
+            <span>机密档案 · v0.2</span>
           </div>
+
+          {/* 知识库入口 — 登录后可见 */}
+          {authUser && (
+            <button
+              type="button"
+              onClick={() => window.location.assign('/library')}
+              title="我的知识库"
+              aria-label="我的知识库"
+              className="flex items-center gap-1.5 rounded-md border border-cyan-500/20 bg-cyan-500/[0.04] px-2.5 py-1 text-cyan-300 transition-colors hover:border-cyan-500/40 hover:bg-cyan-500/10 hover:text-cyan-200"
+            >
+              <BookMarked className="h-3 w-3" />
+              <span>知识库</span>
+            </button>
+          )}
+
+          {/* 探索图谱入口 — 登录后可见 */}
+          {authUser && (
+            <button
+              type="button"
+              onClick={() => window.location.assign('/graph-library')}
+              title="探索图谱知识库"
+              aria-label="探索图谱知识库"
+              className="flex items-center gap-1.5 rounded-md border border-violet-500/20 bg-violet-500/[0.04] px-2.5 py-1 text-violet-300 transition-colors hover:border-violet-500/40 hover:bg-violet-500/10 hover:text-violet-200"
+            >
+              <Network className="h-3 w-3" />
+              <span>探索</span>
+            </button>
+          )}
+
+          {/* 档案库入口 */}
           <button
             type="button"
             onClick={() => setArchiveOpen(true)}
@@ -205,6 +300,56 @@ export default function Home() {
             <Archive className="h-3 w-3" />
             <span>档案库</span>
           </button>
+
+          {/* 用户入口 */}
+          {authUser ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setUserMenuOpen(!userMenuOpen)}
+                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-1 text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.05]"
+              >
+                <span className="h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 grid place-items-center text-[8px] text-emerald-300">
+                  {(authUser.displayName || authUser.email)[0].toUpperCase()}
+                </span>
+                <span className="hidden sm:inline max-w-[80px] truncate">
+                  {authUser.displayName || authUser.email.split('@')[0]}
+                </span>
+              </button>
+              {userMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-white/10 bg-zinc-950/95 backdrop-blur-xl py-1 shadow-xl animate-fade-in">
+                    <div className="px-3 py-2 border-b border-white/[0.06]">
+                      <p className="text-[10px] text-zinc-600 font-mono tracking-wider uppercase">已认证</p>
+                      <p className="text-xs text-zinc-300 truncate mt-0.5">{authUser.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        logout();
+                        setUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-zinc-400 hover:text-rose-300 hover:bg-rose-500/[0.04] transition-colors"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      退出登录
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAuthOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-300 transition-colors hover:border-emerald-500/50 hover:bg-emerald-500/20"
+            >
+              <Fingerprint className="h-3 w-3" />
+              <span>登录 / 注册</span>
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </header>
 
@@ -326,6 +471,24 @@ export default function Home() {
                 <BentoGrid onTagClick={handleTagClick} />
               )
             )}
+
+            {/* P0 统一拦截结果态 — 所有风控入口收敛到此视图 */}
+            {phase === 'blocked' && blockInfo && (
+              <BlockedView
+                reason={blockInfo.reason}
+                layer={blockInfo.layer}
+                query={blockInfo.query}
+                inCompare={blockInfo.inCompare}
+                compareSide={blockInfo.compareSide}
+                onRetry={() => {
+                  // 清空拦截态回 idle，SearchBar 文字保留待用户修改
+                  useOmniVisionStore.getState().setBlockInfo(null);
+                  useOmniVisionStore.getState().setPhase('idle');
+                }}
+                onHome={() => useOmniVisionStore.getState().reset()}
+                onArchive={() => useOmniVisionStore.getState().setArchiveOpen(true)}
+              />
+            )}
           </div>
         )}
       </main>
@@ -333,12 +496,17 @@ export default function Home() {
       {/* C2 历史档案抽屉 */}
       <ArchiveDrawer onSelect={handleArchiveSelect} />
 
+      {/* 认证弹窗 */}
+      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+
       {/* 机密档案解封过渡动画 */}
       {transitioning && (
         <ArchiveUnsealTransition
           query={query}
           fileNo={fileNo}
           phase={phase}
+          agentProgress={agentProgress}
+          agentTimeline={agentTimeline}
           onComplete={() => setTransitioning(false)}
         />
       )}

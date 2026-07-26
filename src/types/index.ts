@@ -18,4 +18,5 @@ export type {
   SearchRequest,
   IntelCard,
   IntelSource,
+  SourceStats,
 } from '../../shared/types';

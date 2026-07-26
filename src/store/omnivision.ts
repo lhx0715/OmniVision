@@ -5,12 +5,71 @@ import type {
   ClarifyOption,
   EntityType,
   IntelSource,
+  SourceStats,
 } from '@/types';
 
-export type Phase = 'idle' | 'clarifying' | 'searching' | 'results';
+export type Phase = 'idle' | 'clarifying' | 'searching' | 'results' | 'blocked';
 export type EngineMode = 'live' | 'mock' | null;
 // D3 多视角切换
 export type ViewMode = 'all' | 'positive' | 'critical' | 'game';
+
+// 风控拦截 Toast
+export interface RiskToastState {
+  message: string;
+  layer: 'dict' | 'llm' | 'frontend';
+  timestamp: number;
+}
+
+// 统一拦截结果态元数据（P0：所有拦截入口收敛到 blocked phase）
+export interface BlockInfo {
+  reason: string;
+  layer: 'dict' | 'llm' | 'frontend';
+  query: string;
+  inCompare: boolean;
+  compareSide?: 'A' | 'B';
+  timestamp: number;
+}
+
+// Agent 进度（ReAct 多轮研究）
+export type AgentStage = 'thinking' | 'searching' | 'observing' | 'finalizing';
+
+export interface AgentProgress {
+  step: number;
+  maxSteps: number;
+  thought: string;
+  stage?: AgentStage;
+  searchQuery?: string;
+  searchFocus?: string;
+  quality?: 'sufficient' | 'partial' | 'insufficient';
+  gaps?: string[];
+  newSources?: { title: string; url: string }[];
+  newFacts?: { content: string; category: string }[];
+  coveredDimensions?: string[];
+  sourcesCount?: number;
+  factsCount?: number;
+  bySource?: Record<string, number>; // PRD-01：多源构成（供研究中 UI 显示）
+  timestamp: number;
+}
+
+// Agent 研究时间线条目（不可变历史快照，用于思考流展示）
+export interface AgentTimelineEntry {
+  id: string; // `${step}-${stage}-${timestamp}` 去重键
+  timestamp: number;
+  step: number;
+  maxSteps: number;
+  stage: AgentStage;
+  thought?: string;
+  searchQuery?: string;
+  searchFocus?: string;
+  quality?: 'sufficient' | 'partial' | 'insufficient';
+  gaps?: string[];
+  newSources?: { title: string; url: string }[];
+  newFacts?: { content: string; category: string }[];
+  coveredDimensions?: string[];
+  sourcesCount?: number;
+  factsCount?: number;
+  bySource?: Record<string, number>;
+}
 
 export const ALL_CARD_TYPES: CardType[] = [
   'verdict',
@@ -60,6 +119,8 @@ interface OmniVisionStore {
   sources: IntelSource[];
   // 影像档案 — Tavily 返回的图片 URL 列表（独立 SSE 事件推送）
   images: string[];
+  // PRD-01 M3：信源构成统计（深度感知展示）
+  sourceStats: SourceStats | null;
 
   // C1 双实体对比模式
   compareMode: boolean;
@@ -87,6 +148,15 @@ interface OmniVisionStore {
   archiveOpen: boolean;
   // D3 多视角切换
   viewMode: ViewMode;
+  // 风控拦截 Toast
+  riskToast: RiskToastState | null;
+  // 统一拦截结果态元数据
+  blockInfo: BlockInfo | null;
+
+  // Agent 进度（ReAct 多轮研究）
+  agentProgress: AgentProgress | null;
+  // Agent 研究时间线（累积所有推送，用于思考流展示）
+  agentTimeline: AgentTimelineEntry[];
 
   setQuery: (q: string) => void;
   setPhase: (p: Phase) => void;
@@ -98,10 +168,15 @@ interface OmniVisionStore {
   setEngineMode: (mode: EngineMode) => void;
   setSources: (sources: IntelSource[]) => void;
   setImages: (images: string[]) => void;
+  setSourceStats: (stats: SourceStats | null) => void;
   clearCards: () => void;
   reset: () => void;
   setArchiveOpen: (open: boolean) => void;
   setViewMode: (mode: ViewMode) => void;
+  setRiskToast: (toast: RiskToastState | null) => void;
+  setBlockInfo: (info: BlockInfo | null) => void;
+  setAgentProgress: (progress: AgentProgress | null) => void;
+  resetAgentTimeline: () => void;
 
   // C1 对比模式
   setCompareMode: (on: boolean) => void;
@@ -143,6 +218,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
   engineMode: null,
   sources: [],
   images: [],
+  sourceStats: null,
 
   compareMode: false,
   compareQueryA: '',
@@ -162,6 +238,10 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
   asks: {},
   archiveOpen: false,
   viewMode: 'all',
+  riskToast: null,
+  blockInfo: null,
+  agentProgress: null,
+  agentTimeline: [],
 
   setQuery: (q) => set({ query: q }),
   setPhase: (p) => set({ phase: p }),
@@ -177,6 +257,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
   setEngineMode: (mode) => set({ engineMode: mode }),
   setSources: (sources) => set({ sources }),
   setImages: (images) => set({ images }),
+  setSourceStats: (stats) => set({ sourceStats: stats }),
   clearCards: () =>
     set({
       cards: {},
@@ -187,6 +268,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       focusedTimelineIndex: null,
       sources: [],
       images: [],
+      sourceStats: null,
       compareMode: false,
       compareQueryA: '',
       compareQueryB: '',
@@ -196,6 +278,9 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       sourcesB: [],
       compareSummary: '',
       compareSummaryLoading: false,
+      agentProgress: null,
+      agentTimeline: [],
+      blockInfo: null,
     }),
   reset: () =>
     set({
@@ -209,6 +294,7 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       engineMode: null,
       sources: [],
       images: [],
+      sourceStats: null,
       compareMode: false,
       compareQueryA: '',
       compareQueryB: '',
@@ -226,10 +312,33 @@ export const useOmniVisionStore = create<OmniVisionStore>((set) => ({
       asks: {},
       archiveOpen: false,
       viewMode: 'all',
+      riskToast: null,
+      agentProgress: null,
+      agentTimeline: [],
+      blockInfo: null,
     }),
 
   setArchiveOpen: (open) => set({ archiveOpen: open }),
   setViewMode: (mode) => set({ viewMode: mode }),
+  setRiskToast: (toast) => set({ riskToast: toast }),
+  setBlockInfo: (info) => set({ blockInfo: info }),
+  setAgentProgress: (progress) =>
+    set((state) => {
+      if (progress === null) {
+        // 仅清最新态，不清 timeline（由 resetAgentTimeline 显式清）
+        return { agentProgress: null };
+      }
+      // 构造 timeline entry，按 id 去重后追加，上限 30 条 FIFO
+      const stage = progress.stage ?? 'thinking';
+      const id = `${progress.step}-${stage}-${progress.timestamp}`;
+      const entry: AgentTimelineEntry = { ...progress, stage, id };
+      const exists = state.agentTimeline.some((e) => e.id === id);
+      const nextTimeline = exists
+        ? state.agentTimeline
+        : [...state.agentTimeline, entry].slice(-30);
+      return { agentProgress: progress, agentTimeline: nextTimeline };
+    }),
+  resetAgentTimeline: () => set({ agentTimeline: [], agentProgress: null }),
 
   // C1 对比模式
   setCompareMode: (on) => set({ compareMode: on }),

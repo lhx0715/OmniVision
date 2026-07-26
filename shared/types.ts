@@ -117,4 +117,17 @@ export interface IntelCard {
 export interface IntelSource {
   title: string;
   url: string;
+  // PRD-01：多源融合元信息（全部可选，向后兼容老消费者）
+  source?: string; // 'tavily' | 'exa' | 'github' | ...
+  publishedAt?: string;
+  confidence?: 'high' | 'medium' | 'low';
+  sourceCount?: number;
+}
+
+// 信源构成统计（PRD-01 FR-05，前端"深度感知"展示用）
+export interface SourceStats {
+  totalSources: number;
+  bySource: Record<string, number>;
+  timeSpan?: { earliest?: string; latest?: string };
+  coveredDimensions: string[];
 }

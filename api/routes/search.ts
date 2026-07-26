@@ -11,7 +11,8 @@ import type { EntityType, SearchRequest, IntelCard, IntelSource } from '../../sh
 import { classifyIntentAsync, getClarifyOptionsAsync } from '../services/intentRouter.js'
 import { hasLLM } from '../services/llmEngine.js'
 import { generateIntelCards as mockGenerate } from '../services/mockEngine.js'
-import { generateIntelCards as llmGenerate } from '../services/llmEngine.js'
+import { generateIntelCardsWithAgent } from '../services/llmEngine.js'
+import { classifyIntent } from '../services/riskGuard.js'
 
 const router = Router()
 
@@ -29,19 +30,6 @@ function randomDelay(): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/**
- * 根据配置选择引擎
- */
-async function generateCards(
-  query: string,
-  entityType: EntityType,
-): Promise<{ cards: IntelCard[]; sources: IntelSource[]; images: string[] }> {
-  if (hasLLM()) {
-    return llmGenerate(query, entityType)
-  }
-  return mockGenerate(query, entityType)
 }
 
 /**
@@ -63,6 +51,17 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
+
+  // ===== 第一重防护：搜索词前置风控校验 + 意图分类 + 信源路由 =====
+  // Class A（违规）→ 直接拦截
+  // Class B（政治敏感）→ 允许搜索，强制权威白名单
+  // Class C（科普通用）→ 允许搜索，排除垃圾源
+  const intent = await classifyIntent(query)
+  if (intent.intent === 'A') {
+    res.write(`data: ${JSON.stringify({ blocked: true, reason: intent.blockReason, layer: intent.layer })}\n\n`)
+    res.end()
+    return
+  }
 
   // 推送引擎模式标识（前端可用于显示状态）
   const engineMode = hasLLM() ? 'live' : 'mock'
@@ -110,7 +109,38 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }, 2000)
 
   try {
-    const { cards, sources, images } = await generateCards(query, finalType)
+    // ===== Agent 模式（LLM 可用时）：ReAct 多轮研究 =====
+    // 每步通过 SSE 推送 agent_step 进度事件，前端进度条据此动态更新
+    let cards: IntelCard[]
+    let sources: IntelSource[]
+    let images: string[]
+    let sourceStats: { totalSources: number; bySource: Record<string, number>; coveredDimensions: string[]; timeSpan?: { earliest?: string; latest?: string } } | null = null
+
+    if (hasLLM()) {
+      const result = await generateIntelCardsWithAgent(
+        query,
+        finalType,
+        {
+          includeDomains: intent.includeDomains,
+          excludeDomains: intent.excludeDomains,
+        },
+        (event) => {
+          // 推送 agent 进度事件
+          if (!closed && !res.writableEnded) {
+            res.write(`data: ${JSON.stringify(event)}\n\n`)
+          }
+        },
+      )
+      cards = result.cards
+      sources = result.sources
+      images = result.images
+      sourceStats = result.sourceStats
+    } else {
+      const result = await mockGenerate(query, finalType)
+      cards = result.cards
+      sources = result.sources
+      images = result.images
+    }
 
     console.log(`[search] 生成完成: ${cards.length} 张卡片, ${sources.length} 个来源, ${images.length} 张图片, closed=${closed}`)
 
@@ -119,6 +149,12 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     // 推送数据源列表（C4 溯源，在卡片之前）
     if (!closed && sources.length > 0) {
       safeWrite({ sources })
+    }
+
+    // PRD-01 M3：推送信源构成统计（供前端"深度感知"展示）
+    // 在 sources 之后、images 之前，让前端先拿到信源构成再渲染构成条
+    if (!closed && sourceStats) {
+      safeWrite({ source_stats: sourceStats })
     }
 
     // 推送图片列表（在 sources 之后、卡片循环之前）
@@ -148,11 +184,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       console.warn('[search] LLM 引擎失败，降级到 mockEngine:', message)
       try {
         const { cards: fallbackCards, sources: fallbackSources, images: fallbackImages } = await mockGenerate(query, finalType)
-        // 降级时也推送数据源（mock 模式通常为空）
         if (!closed && fallbackSources.length > 0) {
           safeWrite({ sources: fallbackSources })
         }
-        // 降级路径也推送图片事件（mock 返回空数组，此处实际不会推送）
         if (!closed && fallbackImages.length > 0) {
           safeWrite({ images: fallbackImages })
         }

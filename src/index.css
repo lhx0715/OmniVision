@@ -672,6 +672,40 @@ body::before {
   animation: archive-stamp-bounce 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+/* 风控拦截 Toast 滑入动画 */
+@keyframes risk-toast-in {
+  0% {
+    transform: translate(-50%, -120%);
+    opacity: 0;
+  }
+  60% {
+    transform: translate(-50%, 8%);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+.animate-risk-toast-in {
+  animation: risk-toast-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* 认证弹窗入场 */
+@keyframes auth-dialog-in {
+  0% {
+    transform: scale(0.92) translateY(20px);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+.animate-auth-dialog-in {
+  animation: auth-dialog-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 .archive-file-stack {
   perspective: 1000px;
 }

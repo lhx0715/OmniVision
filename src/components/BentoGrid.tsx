@@ -12,6 +12,7 @@ import type {
 } from '@/types';
 import SkeletonCard from './SkeletonCard';
 import CardEnterWrapper from './CardEnterWrapper';
+import SaveToLibraryButton from './SaveToLibraryButton';
 import VerdictCard from './cards/VerdictCard';
 import TimelineCard from './cards/TimelineCard';
 import AchievementsCard from './cards/AchievementsCard';
@@ -144,6 +145,10 @@ export default function BentoGrid({
               >
                 <SkeletonCard cardType={type} />
               </div>
+            )}
+            {/* 收藏到知识库按钮 — 仅 results 阶段且有数据时显示 */}
+            {phase === 'results' && data && !cardsOverride && (
+              <SaveToLibraryButton cardType={type} cardPayload={data} />
             )}
             {/* A3 卡片脉冲点 — results 阶段且有数据时显示 */}
             {phase === 'results' && data && (

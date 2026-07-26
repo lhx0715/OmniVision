@@ -241,7 +241,10 @@ export async function getClarifyOptionsAsync(query: string): Promise<ClarifyOpti
         return result.options
       }
       if (result && !result.isAmbiguous) {
-        return []
+        // 矛盾场景：classifyIntentAsync 判定需澄清，但消歧器判定不歧义
+        // 不返回空数组（否则前端 ClarifyPanel 显示空界面），回退到通用三选项保证可用性
+        console.warn('[intentRouter] 分类器与消歧器判断矛盾，回退通用选项:', query)
+        return getClarifyOptions(query)
       }
     } catch (err) {
       console.warn('[intentRouter] LLM 消歧失败，回退到规则:', (err as Error).message)

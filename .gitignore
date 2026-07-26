@@ -31,3 +31,9 @@ agent-skills
 *.sln
 *.sw?
 .vite
+
+# 数据目录（含 SQLite 数据库 omnivision.db，本地运行产物，严禁提交）
+data/
+
+# 根目录工作笔记（产品思考/分析，非代码资产）
+/*.txt

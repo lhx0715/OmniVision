@@ -9,6 +9,7 @@ import type {
   EntityType,
   IntelCard,
   IntelSource,
+  SourceStats,
   VerdictCardData,
   TimelineCardData,
   AchievementsCardData,
@@ -16,6 +17,8 @@ import type {
   GameplayCardData,
   TrendCardData,
 } from '../../shared/types.js'
+import { filterSources } from './riskGuard.js'
+import { runResearchAgent, type AgentProgressEvent } from './researchAgent.js'
 
 // ===== 环境变量（延迟读取：ESM 导入在 dotenv.config() 之前执行）=====
 function cfg() {
@@ -266,18 +269,22 @@ async function searchWithSerper(query: string): Promise<SearchResult> {
 
 /**
  * 统一搜索入口 — 优先 Tavily，其次 Serper
+ * 第二重防护：返回前用 filterSources 清洗违规数据源
  */
 async function searchWeb(query: string): Promise<SearchResult> {
   const { TAVILY_API_KEY, SERPER_API_KEY } = cfg()
   if (TAVILY_API_KEY) {
     const result = await searchWithTavily(query)
-    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${result.sources.length} 个来源, ${result.images.length} 张图片`)
-    return result
+    // 后置防护：剔除违规 URL / 违规标题的数据源
+    const filteredSources = filterSources(result.sources)
+    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${filteredSources.length}/${result.sources.length} 个来源（风控过滤）, ${result.images.length} 张图片`)
+    return { ...result, sources: filteredSources }
   }
   if (SERPER_API_KEY) {
     const result = await searchWithSerper(query)
-    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${result.sources.length} 个来源`)
-    return result
+    const filteredSources = filterSources(result.sources)
+    console.log(`[llmEngine] 搜索完成: ${result.context.length} 字符, ${filteredSources.length}/${result.sources.length} 个来源（风控过滤）`)
+    return { ...result, sources: filteredSources }
   }
   return { context: '', sources: [], images: [] }
 }
@@ -444,7 +451,12 @@ async function generateWithLLM(
       messages: [
         {
           role: 'system',
-          content: '你是一个情报分析 AI。只输出 JSON，不输出任何其他内容。',
+          content: `你是一个情报分析 AI。只输出 JSON，不输出任何其他内容。
+
+## 安全合规约束（强制）
+- 禁止输出任何涉政敏感、色情、暴力、毒品、恐怖主义相关内容
+- 涉及争议性话题时保持中立客观，不做煽动性表述
+- 涉及个人隐私的信息不予展示`,
         },
         { role: 'user', content: prompt },
       ],
@@ -641,8 +653,13 @@ export async function classifyIntentWithLLM(query: string): Promise<EntityType |
 只输出以下之一：
 - HUMAN（人物：真实的人、历史人物、企业家、政治家等）
 - EVENT（事件/现象：历史事件、社会现象、危机、运动等）
-- ITEM（产品/技术/物件：具体产品、技术、公司、货币等）
+- ITEM（产品/技术/物件：具体产品、技术、公司、货币、作品、书籍、影视、游戏等）
 - AMBIGUOUS（一词多义、无法确定，需要用户澄清）
+
+判断规则：
+- 文学作品、书籍、影视、游戏（如水浒传、红楼梦、三体）归为 ITEM
+- 只有真正一词多义（如"苹果"可指公司/水果/乔布斯）才用 AMBIGUOUS
+- 不确定时优先选最可能的类型，而非 AMBIGUOUS
 
 只输出大写标签，不输出任何其他文字。`,
         },
@@ -777,4 +794,128 @@ export async function generateIntelCards(
   const cards = await generateWithLLM(query, entityType, searchContext)
 
   return { cards, sources, images }
+}
+
+// ===== Agent 模式：多轮 ReAct 研究 =====
+
+/**
+ * 解析 LLM 输出的 JSON 为 IntelCard 数组
+ * 复用 normalize 系列函数，与 generateWithLLM 保持一致的宽松处理
+ */
+function parseLLMOutput(content: string): IntelCard[] {
+  if (!content) throw new Error('LLM 返回空内容')
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('LLM 返回内容无法解析为 JSON')
+    parsed = JSON.parse(match[0])
+  }
+
+  const result = IntelReportSchema.safeParse(parsed)
+  let verdict: VerdictCardData
+  let timeline: TimelineCardData
+  let achievements: AchievementsCardData
+  let darkside: DarksideCardData
+  let gameplay: GameplayCardData
+  let trends: TrendCardData
+  if (result.success) {
+    verdict = result.data.verdict as VerdictCardData
+    timeline = result.data.timeline as TimelineCardData
+    achievements = result.data.achievements as AchievementsCardData
+    darkside = result.data.darkside as DarksideCardData
+    gameplay = result.data.gameplay as GameplayCardData
+    trends = normalizeTrends(result.data.trends)
+  } else {
+    console.log(
+      '[llmEngine] Zod 校验警告（已宽松处理）:',
+      result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+    )
+    const p = (parsed ?? {}) as Record<string, unknown>
+    verdict = normalizeVerdict(p.verdict)
+    timeline = normalizeTimeline(p.timeline)
+    achievements = normalizeAchievements(p.achievements)
+    darkside = normalizeDarkside(p.darkside)
+    gameplay = normalizeGameplay(p.gameplay)
+    trends = normalizeTrends(p.trends)
+  }
+
+  const cards: IntelCard[] = [
+    { cardType: 'verdict', payload: verdict },
+    { cardType: 'timeline', payload: timeline },
+    { cardType: 'achievements', payload: achievements },
+  ]
+  if (trends.trends.length > 0) {
+    cards.push({ cardType: 'trends', payload: trends })
+  }
+  cards.push(
+    { cardType: 'darkside', payload: darkside },
+    { cardType: 'gameplay', payload: gameplay },
+  )
+
+  console.log(`[llmEngine] 解析成功: ${cards.length} 张卡片`)
+  return cards
+}
+
+/**
+ * Agent 模式入口 — ReAct 多轮研究
+ *
+ * 通过 onProgress 回调推送 agent 进度事件给 SSE 层。
+ * 失败时自动降级到单次调用模式 generateIntelCards。
+ *
+ * @param onProgress 进度回调
+ */
+export async function generateIntelCardsWithAgent(
+  query: string,
+  entityType: EntityType,
+  options: { includeDomains?: string[]; excludeDomains?: string[] },
+  onProgress?: (event: AgentProgressEvent) => void,
+): Promise<{ cards: IntelCard[]; sources: IntelSource[]; images: string[]; sourceStats: SourceStats }> {
+  console.log(`[llmEngine] Agent 模式启动: query=${query}, type=${entityType}`)
+
+  try {
+    const {
+      rawLLMOutput,
+      sources,
+      images,
+      steps,
+      bySource,
+      coveredDimensions,
+      timeSpan,
+    } = await runResearchAgent(
+      query,
+      entityType,
+      options,
+      onProgress,
+    )
+
+    console.log(`[agent] 完成: ${steps} 轮搜索, ${sources.length} 个来源, ${images.length} 张图片`)
+
+    // 解析最终 LLM 输出
+    const cards = parseLLMOutput(rawLLMOutput)
+
+    // PRD-01 M3：聚合信源构成统计（供前端"深度感知"展示）
+    const sourceStats: SourceStats = {
+      totalSources: sources.length,
+      bySource,
+      coveredDimensions,
+      timeSpan,
+    }
+
+    return { cards, sources, images, sourceStats }
+  } catch (err) {
+    console.warn('[llmEngine] Agent 失败，降级到单次模式:', (err as Error).message)
+    // 降级到原单次模式（无 sourceStats，前端兼容空值）
+    const fallback = await generateIntelCards(query, entityType)
+    return {
+      ...fallback,
+      sourceStats: {
+        totalSources: fallback.sources.length,
+        bySource: {},
+        coveredDimensions: [],
+      },
+    }
+  }
 }
