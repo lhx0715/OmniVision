@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 智能意图分流与信源风控系统
  *
  * 三类意图分类：
@@ -8,7 +8,7 @@
  *
  * 部署位置：后端 /api/search 入口，在 Tavily/LLM 生成之前执行
  */
-import { localDictCheck, type RiskCheckResult } from '@shared/riskDict.js'
+import { localDictCheck, type RiskCheckResult } from '../../../shared/riskDict.js'
 
 function cfg() {
   return {
