@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String  @id @default(dbgenerated("gen_random_uuid()"))
+  email        String  @unique
+  passwordHash String  @map("password_hash")
+  displayName  String? @map("display_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model KnowledgeItem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()"))
+  userId      String  @map("user_id")
+  sourceQuery String  @map("source_query")
+  entityName  String  @map("entity_name")
+  entityType  String? @map("entity_type")
+  cardType    String  @map("card_type")
+  cardPayload String  @map("card_payload")
+  savedAt     DateTime @default(now()) @map("saved_at")
+
+  @@map("knowledge_items")
+}
+
+model Entity {
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId      String   @map("user_id")
+  name        String
+  entityType  String?  @map("entity_type")
+  sourceQuery String?  @map("source_query")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("entities")
+  @@unique([userId, name])
+}
+
+model Relation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId        String   @map("user_id")
+  fromEntityId  String   @map("from_entity_id")
+  toEntityId    String   @map("to_entity_id")
+  relationType  String   @map("relation_type")
+  sourceCardType String? @map("source_card_type")
+  sourceQuery   String?  @map("source_query")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("relations")
+  @@unique([userId, fromEntityId, toEntityId, relationType])
+}
+
+model ExplorationSession {
+  id             String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId         String   @map("user_id")
+  title          String
+  seedLabel      String   @map("seed_label")
+  seedEntityType String?  @map("seed_entity_type")
+  seedFrom       String?  @map("seed_from")
+  status         String   @default("active")
+  stepCount      Int      @map("step_count") @default(0)
+  nodeCount      Int      @map("node_count") @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @map("updated_at")
+
+  @@map("exploration_sessions")
+}
+
+model ExplorationNode {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  sessionId     String   @map("session_id")
+  userId        String   @map("user_id")
+  label         String
+  entityType    String?  @map("entity_type")
+  createdByStep Int      @map("created_by_step")
+  x             Float?
+  y             Float?
+  meta          String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("exploration_nodes")
+  @@unique([sessionId, label])
+}
+
+model ExplorationEdge {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  sessionId     String   @map("session_id")
+  userId        String   @map("user_id")
+  fromNodeId    String   @map("from_node_id")
+  toNodeId      String   @map("to_node_id")
+  relation      String
+  createdByStep Int      @map("created_by_step")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("exploration_edges")
+  @@unique([sessionId, fromNodeId, toNodeId, relation])
+}
+
+model ExplorationStep {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  sessionId     String   @map("session_id")
+  userId        String   @map("user_id")
+  stepIndex     Int      @map("step_index")
+  targetNodeId  String?  @map("target_node_id")
+  targetLabel   String?  @map("target_label")
+  question      String
+  answerSummary String?  @map("answer_summary")
+  addedNodeIds  String?  @map("added_node_ids")
+  addedEdgeIds  String?  @map("added_edge_ids")
+  sources       String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("exploration_steps")
+}
+
+model SearchCache {
+  cacheKey   String   @id
+  query      String
+  source     String
+  dimension  String?
+  docsJson   String   @map("docs_json")
+  imagesJson String?  @map("images_json")
+  answer     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("search_cache")
+}

@@ -1,10 +1,3 @@
-﻿/**
- * 适配器注册表 + 多源并行召回（PRD-01 FR-01/FR-03）
- *
- * - getActiveAdapters：按 env key 探测 + supports() 过滤，无 key 自动跳过
- * - searchAll：并发调用各适配器（Promise.allSettled，单源失败不阻塞），
- *   收集 perSource ranked list + images，再 RRF 融合 + 去重
- */
 import type { EntityType } from '@shared/types.js'
 import type {
   SourceAdapter,
@@ -23,7 +16,6 @@ import { makeCacheKey, getCached, setCache, cleanExpired } from '../searchCache.
 
 const ALL_ADAPTERS: SourceAdapter[] = [tavilyAdapter, exaAdapter, githubAdapter]
 
-/** 该源是否有可用凭证（github 匿名可用） */
 function isAvailable(name: SourceName): boolean {
   switch (name) {
     case 'tavily':
@@ -31,16 +23,12 @@ function isAvailable(name: SourceName): boolean {
     case 'exa':
       return !!process.env.EXA_API_KEY
     case 'github':
-      return true // 匿名调用，10次/分
+      return true
     default:
       return false
   }
 }
 
-/**
- * 取当前可用的适配器集合（按实体类型/维度过滤）。
- * 若全部不可用，返回 [tavilyAdapter]（search() 内部再降级为空，保底不崩）。
- */
 export function getActiveAdapters(
   entityType: EntityType,
   dimension?: Dimension,
@@ -55,29 +43,23 @@ export function getActiveAdapters(
   return active
 }
 
-/**
- * 多源并行召回 + RRF 融合 + 去重。
- * 单源失败（网络/限流/解析）不阻塞，仅该源 docs 为空。
- */
 export async function searchAll(
   query: string,
   opts: SearchOpts,
   adapters: SourceAdapter[],
 ): Promise<RecallResult> {
-  // 懒清理过期缓存（进程首次调用时执行一次，后续不再清理）
-  cleanExpired()
+  await cleanExpired()
 
-  // 缓存层：每个适配器调用前先查 24h 缓存，命中则跳过真实 API 调用
   const settled = await Promise.allSettled(
     adapters.map(async (a) => {
       const cacheKey = makeCacheKey(query, a.name, opts)
-      const cached = getCached(cacheKey)
+      const cached = await getCached(cacheKey)
       if (cached) {
         console.log(`[sources] ${a.name} 缓存命中: ${query.slice(0, 30)}`)
         return cached
       }
       const result = await a.search(query, opts)
-      setCache(cacheKey, query, a.name, opts.dimension, result)
+      await setCache(cacheKey, query, a.name, opts.dimension, result)
       return result
     }),
   )
@@ -105,12 +87,9 @@ export async function searchAll(
     }
   })
 
-  // RRF 融合（跨源 URL 重复自动合并得分）
   const fused = rrfFuse(perSource)
-  // 去重（标题近重复合并，RRF 已处理 URL 重复，此处主要兜底）
   const { docs, sourceMap } = dedupe(fused)
 
-  // 把跨源印证信息回填到 doc.meta.crossSources（供 M2 置信度用）
   for (const d of docs) {
     const sources = sourceMap.get(normalizeUrl(d.url))
     if (sources && sources.length > 1) {

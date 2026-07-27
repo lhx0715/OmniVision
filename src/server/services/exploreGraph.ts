@@ -1,14 +1,4 @@
-﻿/**
- * 探索图谱会话服务（PRD-02 FR-06/FR-07）
- *
- * 会话内 getOrCreate 节点/边（与收藏图谱 entities/relations 完全隔离），
- * 写 step 记录（回溯核心），增量并图。
- *
- * 所有操作带 session_id + user_id 双重隔离校验。
- */
-import { getDb, uuid } from '../db.js'
-
-// ===== 类型 =====
+import { prisma, uuid } from '../db.js'
 
 export interface ExplorationSession {
   id: string
@@ -54,270 +44,234 @@ export interface ExplorationStep {
   targetLabel: string | null
   question: string
   answerSummary: string | null
-  addedNodeIds: string[] // 解析自 JSON
+  addedNodeIds: string[]
   addedEdgeIds: string[]
-  sources: unknown[] // 解析自 JSON
+  sources: unknown[]
   createdAt: string
 }
 
-// ===== 会话管理 =====
-
-/**
- * 创建探索会话 + 种子节点（step 0）
- */
-export function createSession(
+export async function createSession(
   userId: string,
   opts: { title?: string; seedLabel: string; seedEntityType?: string | null; seedFrom?: string },
-): ExplorationSession {
-  const db = getDb()
+): Promise<ExplorationSession> {
   const sessionId = uuid()
   const title = opts.title?.trim() || `${opts.seedLabel}的探索`
   const seedFrom = opts.seedFrom || 'manual'
 
-  db.transaction(() => {
-    db.prepare(
-      `INSERT INTO exploration_sessions (id, user_id, title, seed_label, seed_entity_type, seed_from, status, step_count, node_count)
-       VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 1)`,
-    ).run(sessionId, userId, title, opts.seedLabel, opts.seedEntityType ?? null, seedFrom)
+  await prisma.$transaction([
+    prisma.explorationSession.create({
+      data: {
+        id: sessionId,
+        userId,
+        title,
+        seedLabel: opts.seedLabel,
+        seedEntityType: opts.seedEntityType ?? null,
+        seedFrom,
+        status: 'active',
+        stepCount: 0,
+        nodeCount: 1,
+      },
+    }),
+    prisma.explorationNode.create({
+      data: {
+        id: uuid(),
+        sessionId,
+        userId,
+        label: opts.seedLabel,
+        entityType: opts.seedEntityType ?? null,
+        createdByStep: 0,
+        x: 400,
+        y: 300,
+      },
+    }),
+  ])
 
-    // 种子节点（step 0，居中）
-    const nodeId = uuid()
-    db.prepare(
-      `INSERT INTO exploration_nodes (id, session_id, user_id, label, entity_type, created_by_step, x, y)
-       VALUES (?, ?, ?, ?, ?, 0, 400, 300)`,
-    ).run(nodeId, sessionId, userId, opts.seedLabel, opts.seedEntityType ?? null)
-  })()
-
-  return getSession(userId, sessionId)!
+  return (await getSession(userId, sessionId))!
 }
 
-/**
- * 获取会话元信息
- */
-export function getSession(userId: string, sessionId: string): ExplorationSession | null {
-  const db = getDb()
-  const row = db
-    .prepare(
-      `SELECT id, user_id, title, seed_label, seed_entity_type, seed_from, status, step_count, node_count, created_at, updated_at
-       FROM exploration_sessions WHERE id = ? AND user_id = ?`,
-    )
-    .get(sessionId, userId) as any
+export async function getSession(userId: string, sessionId: string): Promise<ExplorationSession | null> {
+  const row = await prisma.explorationSession.findUnique({
+    where: { id: sessionId, userId },
+  })
   if (!row) return null
   return {
     id: row.id,
-    userId: row.user_id,
+    userId: row.userId,
     title: row.title,
-    seedLabel: row.seed_label,
-    seedEntityType: row.seed_entity_type,
-    seedFrom: row.seed_from,
-    status: row.status,
-    stepCount: row.step_count,
-    nodeCount: row.node_count,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    seedLabel: row.seedLabel,
+    seedEntityType: row.seedEntityType,
+    seedFrom: row.seedFrom,
+    status: row.status as 'active' | 'archived',
+    stepCount: row.stepCount,
+    nodeCount: row.nodeCount,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   }
 }
 
-/**
- * 列出用户所有会话（图谱知识库文件夹视图）
- */
-export function listSessions(userId: string): ExplorationSession[] {
-  const db = getDb()
-  const rows = db
-    .prepare(
-      `SELECT id, user_id, title, seed_label, seed_entity_type, seed_from, status, step_count, node_count, created_at, updated_at
-       FROM exploration_sessions WHERE user_id = ? ORDER BY updated_at DESC`,
-    )
-    .all(userId) as any[]
+export async function listSessions(userId: string): Promise<ExplorationSession[]> {
+  const rows = await prisma.explorationSession.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+  })
   return rows.map((row) => ({
     id: row.id,
-    userId: row.user_id,
+    userId: row.userId,
     title: row.title,
-    seedLabel: row.seed_label,
-    seedEntityType: row.seed_entity_type,
-    seedFrom: row.seed_from,
-    status: row.status,
-    stepCount: row.step_count,
-    nodeCount: row.node_count,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    seedLabel: row.seedLabel,
+    seedEntityType: row.seedEntityType,
+    seedFrom: row.seedFrom,
+    status: row.status as 'active' | 'archived',
+    stepCount: row.stepCount,
+    nodeCount: row.nodeCount,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   }))
 }
 
-/**
- * 更新会话（改名 / 归档 / 重新激活）
- */
-export function updateSession(
+export async function updateSession(
   userId: string,
   sessionId: string,
   opts: { title?: string; status?: 'active' | 'archived' },
-): boolean {
-  const db = getDb()
-  const sets: string[] = []
-  const params: any[] = []
-  if (opts.title !== undefined) {
-    sets.push('title = ?')
-    params.push(opts.title.trim())
-  }
-  if (opts.status !== undefined) {
-    sets.push('status = ?')
-    params.push(opts.status)
-  }
-  if (sets.length === 0) return false
-  sets.push("updated_at = datetime('now')")
-  params.push(sessionId, userId)
-  const result = db.prepare(`UPDATE exploration_sessions SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...params)
-  return result.changes > 0
+): Promise<boolean> {
+  const data: Record<string, unknown> = {}
+  if (opts.title !== undefined) data.title = opts.title.trim()
+  if (opts.status !== undefined) data.status = opts.status
+  data.updatedAt = new Date()
+
+  if (Object.keys(data).length === 1) return false
+
+  const result = await prisma.explorationSession.updateMany({
+    where: { id: sessionId, userId },
+    data,
+  })
+  return result.count > 0
 }
 
-/**
- * 删除会话（级联删节点/边/步）
- */
-export function deleteSession(userId: string, sessionId: string): boolean {
-  const db = getDb()
-  const result = db
-    .prepare('DELETE FROM exploration_sessions WHERE id = ? AND user_id = ?')
-    .run(sessionId, userId)
-  return result.changes > 0
+export async function deleteSession(userId: string, sessionId: string): Promise<boolean> {
+  const result = await prisma.explorationSession.deleteMany({
+    where: { id: sessionId, userId },
+  })
+  return result.count > 0
 }
 
-// ===== 图谱数据查询 =====
-
-/**
- * 获取会话完整图（nodes + edges + steps）
- */
-export function getSessionGraph(userId: string, sessionId: string): {
+export async function getSessionGraph(userId: string, sessionId: string): Promise<{
   session: ExplorationSession | null
   nodes: ExplorationNode[]
   edges: ExplorationEdge[]
   steps: ExplorationStep[]
-} {
-  const session = getSession(userId, sessionId)
+}> {
+  const session = await getSession(userId, sessionId)
   if (!session) return { session: null, nodes: [], edges: [], steps: [] }
 
-  const db = getDb()
+  const [nodes, edges, steps] = await Promise.all([
+    prisma.explorationNode.findMany({
+      where: { sessionId, userId },
+      orderBy: [{ createdByStep: 'asc' }, { createdAt: 'asc' }],
+    }),
+    prisma.explorationEdge.findMany({
+      where: { sessionId, userId },
+      orderBy: [{ createdByStep: 'asc' }, { createdAt: 'asc' }],
+    }),
+    prisma.explorationStep.findMany({
+      where: { sessionId, userId },
+      orderBy: { stepIndex: 'asc' },
+    }),
+  ])
 
-  const nodeRows = db
-    .prepare(
-      `SELECT id, session_id, label, entity_type, created_by_step, x, y, meta, created_at
-       FROM exploration_nodes WHERE session_id = ? AND user_id = ? ORDER BY created_by_step, created_at`,
-    )
-    .all(sessionId, userId) as any[]
-  const nodes: ExplorationNode[] = nodeRows.map((r) => ({
-    id: r.id,
-    sessionId: r.session_id,
-    label: r.label,
-    entityType: r.entity_type,
-    createdByStep: r.created_by_step,
-    x: r.x,
-    y: r.y,
-    meta: r.meta,
-    createdAt: r.created_at,
-  }))
-
-  const edgeRows = db
-    .prepare(
-      `SELECT id, session_id, from_node_id, to_node_id, relation, created_by_step, created_at
-       FROM exploration_edges WHERE session_id = ? AND user_id = ? ORDER BY created_by_step, created_at`,
-    )
-    .all(sessionId, userId) as any[]
-  const edges: ExplorationEdge[] = edgeRows.map((r) => ({
-    id: r.id,
-    sessionId: r.session_id,
-    fromNodeId: r.from_node_id,
-    toNodeId: r.to_node_id,
-    relation: r.relation,
-    createdByStep: r.created_by_step,
-    createdAt: r.created_at,
-  }))
-
-  const stepRows = db
-    .prepare(
-      `SELECT id, session_id, step_index, target_node_id, target_label, question, answer_summary, added_node_ids, added_edge_ids, sources, created_at
-       FROM exploration_steps WHERE session_id = ? AND user_id = ? ORDER BY step_index`,
-    )
-    .all(sessionId, userId) as any[]
-  const steps: ExplorationStep[] = stepRows.map((r) => ({
-    id: r.id,
-    sessionId: r.session_id,
-    stepIndex: r.step_index,
-    targetNodeId: r.target_node_id,
-    targetLabel: r.target_label,
-    question: r.question,
-    answerSummary: r.answer_summary,
-    addedNodeIds: safeParseArray(r.added_node_ids),
-    addedEdgeIds: safeParseArray(r.added_edge_ids),
-    sources: safeParseArray(r.sources),
-    createdAt: r.created_at,
-  }))
-
-  return { session, nodes, edges, steps }
+  return {
+    session,
+    nodes: nodes.map((n) => ({
+      id: n.id,
+      sessionId: n.sessionId,
+      label: n.label,
+      entityType: n.entityType,
+      createdByStep: n.createdByStep,
+      x: n.x ?? null,
+      y: n.y ?? null,
+      meta: n.meta ?? null,
+      createdAt: n.createdAt.toISOString(),
+    })),
+    edges: edges.map((e) => ({
+      id: e.id,
+      sessionId: e.sessionId,
+      fromNodeId: e.fromNodeId,
+      toNodeId: e.toNodeId,
+      relation: e.relation,
+      createdByStep: e.createdByStep,
+      createdAt: e.createdAt.toISOString(),
+    })),
+    steps: steps.map((s) => ({
+      id: s.id,
+      sessionId: s.sessionId,
+      stepIndex: s.stepIndex,
+      targetNodeId: s.targetNodeId ?? null,
+      targetLabel: s.targetLabel ?? null,
+      question: s.question,
+      answerSummary: s.answerSummary ?? null,
+      addedNodeIds: safeParseArray(s.addedNodeIds),
+      addedEdgeIds: safeParseArray(s.addedEdgeIds),
+      sources: safeParseArray(s.sources),
+      createdAt: s.createdAt.toISOString(),
+    })),
+  }
 }
 
-// ===== 会话内 getOrCreate（同名合并）=====
-
-/**
- * 会话内 getOrCreate 节点。
- * 同名合并（UNIQUE(session_id, label)）。
- * @returns { id, isNew }
- */
-export function getOrCreateNode(
+export async function getOrCreateNode(
   userId: string,
   sessionId: string,
   label: string,
   entityType: string | null,
   step: number,
-): { id: string; isNew: boolean } {
-  const db = getDb()
-  const existing = db
-    .prepare('SELECT id FROM exploration_nodes WHERE session_id = ? AND label = ?')
-    .get(sessionId, label) as { id: string } | undefined
+): Promise<{ id: string; isNew: boolean }> {
+  const existing = await prisma.explorationNode.findUnique({
+    where: { sessionId_label: { sessionId, label } },
+  })
   if (existing) return { id: existing.id, isNew: false }
 
   const id = uuid()
-  db.prepare(
-    `INSERT INTO exploration_nodes (id, session_id, user_id, label, entity_type, created_by_step, x, y)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-  ).run(id, sessionId, userId, label, entityType, step)
+  await prisma.explorationNode.create({
+    data: {
+      id,
+      sessionId,
+      userId,
+      label,
+      entityType,
+      createdByStep: step,
+    },
+  })
   return { id, isNew: true }
 }
 
-/**
- * 会话内 getOrCreate 边。
- * 相同 from-to-relation 合并（UNIQUE 约束）。
- * @returns { id, isNew }
- */
-export function getOrCreateEdge(
+export async function getOrCreateEdge(
   userId: string,
   sessionId: string,
   fromNodeId: string,
   toNodeId: string,
   relation: string,
   step: number,
-): { id: string; isNew: boolean } {
-  const db = getDb()
-  const existing = db
-    .prepare(
-      'SELECT id FROM exploration_edges WHERE session_id = ? AND from_node_id = ? AND to_node_id = ? AND relation = ?',
-    )
-    .get(sessionId, fromNodeId, toNodeId, relation) as { id: string } | undefined
+): Promise<{ id: string; isNew: boolean }> {
+  const existing = await prisma.explorationEdge.findUnique({
+    where: { sessionId_fromNodeId_toNodeId_relation: { sessionId, fromNodeId, toNodeId, relation } },
+  })
   if (existing) return { id: existing.id, isNew: false }
 
   const id = uuid()
-  db.prepare(
-    `INSERT INTO exploration_edges (id, session_id, user_id, from_node_id, to_node_id, relation, created_by_step)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, sessionId, userId, fromNodeId, toNodeId, relation, step)
+  await prisma.explorationEdge.create({
+    data: {
+      id,
+      sessionId,
+      userId,
+      fromNodeId,
+      toNodeId,
+      relation,
+      createdByStep: step,
+    },
+  })
   return { id, isNew: true }
 }
 
-// ===== Step 记录 =====
-
-/**
- * 写 step 记录 + 更新会话计数。
- * 在 relationDiscovery 完成后调用，事务保证一致性。
- */
-export function writeStep(
+export async function writeStep(
   userId: string,
   sessionId: string,
   opts: {
@@ -330,33 +284,39 @@ export function writeStep(
     addedEdgeIds: string[]
     sources: unknown[]
   },
-): ExplorationStep {
-  const db = getDb()
+): Promise<ExplorationStep> {
   const stepId = uuid()
 
-  db.transaction(() => {
-    db.prepare(
-      `INSERT INTO exploration_steps (id, session_id, user_id, step_index, target_node_id, target_label, question, answer_summary, added_node_ids, added_edge_ids, sources)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      stepId,
-      sessionId,
-      userId,
-      opts.stepIndex,
-      opts.targetNodeId,
-      opts.targetLabel,
-      opts.question,
-      opts.answerSummary,
-      JSON.stringify(opts.addedNodeIds),
-      JSON.stringify(opts.addedEdgeIds),
-      JSON.stringify(opts.sources),
-    )
+  await prisma.$transaction([
+    prisma.explorationStep.create({
+      data: {
+        id: stepId,
+        sessionId,
+        userId,
+        stepIndex: opts.stepIndex,
+        targetNodeId: opts.targetNodeId ?? null,
+        targetLabel: opts.targetLabel ?? null,
+        question: opts.question,
+        answerSummary: opts.answerSummary,
+        addedNodeIds: JSON.stringify(opts.addedNodeIds),
+        addedEdgeIds: JSON.stringify(opts.addedEdgeIds),
+        sources: JSON.stringify(opts.sources),
+      },
+    }),
+    prisma.explorationSession.update({
+      where: { id: sessionId },
+      data: {
+        stepCount: opts.stepIndex,
+        updatedAt: new Date(),
+      },
+    }),
+  ])
 
-    // 更新会话计数
-    db.prepare(
-      `UPDATE exploration_sessions SET step_count = ?, node_count = (SELECT COUNT(*) FROM exploration_nodes WHERE session_id = ?), updated_at = datetime('now') WHERE id = ?`,
-    ).run(opts.stepIndex, sessionId, sessionId)
-  })()
+  const nodeCount = await prisma.explorationNode.count({ where: { sessionId } })
+  await prisma.explorationSession.update({
+    where: { id: sessionId },
+    data: { nodeCount },
+  })
 
   return {
     id: stepId,
@@ -373,39 +333,40 @@ export function writeStep(
   }
 }
 
-/**
- * 回退删除第 k 步（级联删该步新增的节点/边 + step 记录）
- */
-export function deleteStep(userId: string, sessionId: string, stepIndex: number): boolean {
-  const db = getDb()
-  const result = db.transaction(() => {
-    // 删除该步新增的边
-    db.prepare(
-      'DELETE FROM exploration_edges WHERE session_id = ? AND created_by_step = ?',
-    ).run(sessionId, stepIndex)
-    // 删除该步新增的节点（但种子节点 step=0 不删）
-    if (stepIndex > 0) {
-      db.prepare(
-        'DELETE FROM exploration_nodes WHERE session_id = ? AND created_by_step = ?',
-      ).run(sessionId, stepIndex)
-    }
-    // 删除 step 记录
-    const r = db
-      .prepare('DELETE FROM exploration_steps WHERE session_id = ? AND step_index = ?')
-      .run(sessionId, stepIndex)
+export async function deleteStep(userId: string, sessionId: string, stepIndex: number): Promise<boolean> {
+  await prisma.$transaction([
+    prisma.explorationEdge.deleteMany({
+      where: { sessionId, createdByStep: stepIndex },
+    }),
+    prisma.explorationNode.deleteMany({
+      where: { sessionId, createdByStep: stepIndex },
+    }),
+    prisma.explorationStep.deleteMany({
+      where: { sessionId, stepIndex },
+    }),
+  ])
 
-    // 更新会话计数
-    db.prepare(
-      `UPDATE exploration_sessions SET step_count = (SELECT COALESCE(MAX(step_index), 0) FROM exploration_steps WHERE session_id = ?), node_count = (SELECT COUNT(*) FROM exploration_nodes WHERE session_id = ?), updated_at = datetime('now') WHERE id = ?`,
-    ).run(sessionId, sessionId, sessionId)
-    return r.changes > 0
-  })()
-  return result
+  const [maxStep, nodeCount] = await Promise.all([
+    prisma.explorationStep.aggregate({
+      where: { sessionId },
+      _max: { stepIndex: true },
+    }),
+    prisma.explorationNode.count({ where: { sessionId } }),
+  ])
+
+  await prisma.explorationSession.update({
+    where: { id: sessionId },
+    data: {
+      stepCount: maxStep._max.stepIndex ?? 0,
+      nodeCount,
+      updatedAt: new Date(),
+    },
+  })
+
+  return true
 }
 
-// ===== 辅助 =====
-
-function safeParseArray(json: string | null): any[] {
+function safeParseArray(json: string | null | undefined): any[] {
   if (!json) return []
   try {
     const arr = JSON.parse(json)

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * This is a API server
  */
 
@@ -11,7 +11,7 @@ import cors from 'cors'
 import path from 'path'
 import dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
-import { getDb } from './db.js'
+import { prisma } from './db.js'
 import authRoutes from './routes/auth.js'
 import searchRoutes from './routes/search.js'
 import clarifyRoutes from './routes/clarify.js'
@@ -29,8 +29,7 @@ const __dirname = path.dirname(__filename)
 // load env
 dotenv.config()
 
-// 初始化数据库
-getDb()
+
 
 const app: express.Application = express()
 

@@ -1,29 +1,12 @@
-﻿/**
- * 关系发现服务（PRD-02 FR-07）
- *
- * 探索图谱的核心：针对选中节点追问 → 多源检索 → LLM 三元组抽取 → 并入会话图。
- *
- * 流程：
- *   1. 取 targetNode 上下文（label/type/已有邻居）+ question
- *   2. 多源检索（复用 PRD-01 适配器+融合，聚焦"关系发现"）
- *   3. LLM 关系抽取（锚定 targetNode，发现新实体）
- *   4. 并入会话图（getOrCreateNode/Edge + writeStep）
- *
- * 复用：sources/registry、fusion、llmClient
- */
 import type { EntityType } from '@shared/types.js'
 import { getActiveAdapters, searchAll } from './sources/registry.js'
 import type { RecallResult, RawDoc } from './sources/types.js'
 import { callLLM, extractJSON } from './llmClient.js'
 import { getOrCreateNode, getOrCreateEdge, writeStep } from './exploreGraph.js'
 
-// ===== 配置 =====
-
 const MAX_RESULTS_PER_SEARCH = 6
-const MAX_DOCS_FOR_EXTRACTION = 15 // 控制送 LLM 的文档数
+const MAX_DOCS_FOR_EXTRACTION = 15
 const MAX_DOC_CONTENT_LEN = 600
-
-// ===== 类型 =====
 
 export interface DiscoveredRelation {
   from: string
@@ -40,8 +23,6 @@ export interface DiscoveryResult {
   sources: { title: string; url: string }[]
   stepIndex: number
 }
-
-// ===== LLM 关系抽取 Prompt（锚定 targetNode）=====
 
 const RELATION_DISCOVERY_PROMPT = `你是知识图谱关系发现器。基于搜索结果，针对目标实体「{TARGET}」发现其与相关实体的关系。
 
@@ -71,9 +52,6 @@ const RELATION_DISCOVERY_PROMPT = `你是知识图谱关系发现器。基于搜
   "new_entities": ["新发现的实体名1", "实体名2"]
 }`
 
-/**
- * LLM 关系抽取（锚定 targetNode）
- */
 async function extractRelations(
   targetLabel: string,
   question: string,
@@ -138,9 +116,6 @@ function normalizeType(t?: string): string | null {
   return null
 }
 
-/**
- * 多源检索（复用 PRD-01 适配器）
- */
 async function multiSourceSearch(
   query: string,
   entityType: EntityType,
@@ -159,31 +134,11 @@ async function multiSourceSearch(
   }
 }
 
-/**
- * 构建搜索查询：targetLabel + question
- */
 function buildSearchQuery(targetLabel: string, question: string): string {
-  // 简单拼接：目标实体 + 追问关键词
-  // 如果 question 已包含 targetLabel，直接用 question
   if (question.includes(targetLabel)) return question
   return `${targetLabel} ${question}`
 }
 
-// ===== 主入口：发现关系并并入会话图 =====
-
-/**
- * 对 targetNode 追问 → 多源检索 → LLM 抽取 → 并入会话图 → 写 step
- *
- * @param userId 用户 ID
- * @param sessionId 会话 ID
- * @param targetNodeId 被追问的节点 ID
- * @param targetLabel 被追问的节点名称
- * @param targetEntityType 被追问节点的实体类型
- * @param question 用户追问
- * @param stepIndex 当前步数（从 1 开始，0 是种子）
- * @param neighborLabels 已有邻居标签（避免重复发现）
- * @param onProgress SSE 进度回调
- */
 export async function discoverAndMerge(
   userId: string,
   sessionId: string,
@@ -195,18 +150,16 @@ export async function discoverAndMerge(
   neighborLabels: string[],
   onProgress?: (stage: string, data?: unknown) => void,
 ): Promise<DiscoveryResult> {
-  // ① planning
   onProgress?.('planning')
   const searchQuery = buildSearchQuery(targetLabel, question)
   console.log(`[relationDiscovery] Step ${stepIndex}: target="${targetLabel}", query="${searchQuery}"`)
 
-  // ② searching（多源并行）
   onProgress?.('searching', { searchQuery })
   const recall = await multiSourceSearch(searchQuery, targetEntityType)
 
   if (recall.docs.length === 0) {
     console.warn('[relationDiscovery] 搜索无结果')
-    const step = writeStep(userId, sessionId, {
+    await writeStep(userId, sessionId, {
       stepIndex,
       targetNodeId,
       targetLabel,
@@ -225,7 +178,6 @@ export async function discoverAndMerge(
     }
   }
 
-  // ③ extracting（LLM 三元组抽取）
   onProgress?.('extracting')
   const docsForContext = recall.docs.slice(0, MAX_DOCS_FOR_EXTRACTION)
   const searchContext = docsForContext
@@ -244,7 +196,6 @@ export async function discoverAndMerge(
     neighborLabels,
   )
 
-  // ④ merging（并入会话图）
   onProgress?.('merging')
   const addedNodes: DiscoveryResult['addedNodes'] = []
   const addedEdges: DiscoveryResult['addedEdges'] = []
@@ -252,24 +203,21 @@ export async function discoverAndMerge(
   const addedEdgeIds: string[] = []
 
   for (const rel of relations) {
-    // getOrCreate from 节点
-    const fromResult = getOrCreateNode(userId, sessionId, rel.from, rel.fromType, stepIndex)
+    const fromResult = await getOrCreateNode(userId, sessionId, rel.from, rel.fromType, stepIndex)
     if (fromResult.isNew) {
       addedNodes.push({ id: fromResult.id, label: rel.from, entityType: rel.fromType, isNew: true })
       addedNodeIds.push(fromResult.id)
       onProgress?.('newNode', { id: fromResult.id, label: rel.from, entityType: rel.fromType })
     }
 
-    // getOrCreate to 节点
-    const toResult = getOrCreateNode(userId, sessionId, rel.to, rel.toType, stepIndex)
+    const toResult = await getOrCreateNode(userId, sessionId, rel.to, rel.toType, stepIndex)
     if (toResult.isNew) {
       addedNodes.push({ id: toResult.id, label: rel.to, entityType: rel.toType, isNew: true })
       addedNodeIds.push(toResult.id)
       onProgress?.('newNode', { id: toResult.id, label: rel.to, entityType: rel.toType })
     }
 
-    // getOrCreate 边
-    const edgeResult = getOrCreateEdge(
+    const edgeResult = await getOrCreateEdge(
       userId,
       sessionId,
       fromResult.id,
@@ -297,11 +245,9 @@ export async function discoverAndMerge(
     }
   }
 
-  // 提取来源（前 8 条）
   const sources = recall.docs.slice(0, 8).map((d: RawDoc) => ({ title: d.title, url: d.url }))
 
-  // ⑤ 写 step 记录
-  writeStep(userId, sessionId, {
+  await writeStep(userId, sessionId, {
     stepIndex,
     targetNodeId,
     targetLabel,

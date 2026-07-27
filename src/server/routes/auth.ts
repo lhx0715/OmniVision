@@ -1,19 +1,9 @@
-﻿/**
- * 用户认证路由
- * POST /api/auth/register — 注册
- * POST /api/auth/login    — 登录
- * GET  /api/auth/me       — 获取当前用户信息
- */
 import { Router, type Request, type Response } from 'express'
 import { registerUser, loginUser, getUserById, extractUserId } from '../services/authService.js'
 
 const router = Router()
 
-/**
- * POST /api/auth/register
- * Body: { email, password, displayName? }
- */
-router.post('/register', (req: Request, res: Response): void => {
+router.post('/register', async (req: Request, res: Response): Promise<void> => {
   const { email, password, displayName } = req.body ?? {}
 
   if (!email || typeof email !== 'string' || !email.trim()) {
@@ -25,14 +15,13 @@ router.post('/register', (req: Request, res: Response): void => {
     return
   }
 
-  // 简单邮箱格式校验
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     res.status(400).json({ success: false, error: '邮箱格式不正确' })
     return
   }
 
   try {
-    const { user, token } = registerUser(email, password, displayName)
+    const { user, token } = await registerUser(email, password, displayName)
     res.json({ success: true, user, token })
   } catch (err) {
     const message = (err as Error).message
@@ -41,11 +30,7 @@ router.post('/register', (req: Request, res: Response): void => {
   }
 })
 
-/**
- * POST /api/auth/login
- * Body: { email, password }
- */
-router.post('/login', (req: Request, res: Response): void => {
+router.post('/login', async (req: Request, res: Response): Promise<void> => {
   const { email, password } = req.body ?? {}
 
   if (!email || !password) {
@@ -54,18 +39,14 @@ router.post('/login', (req: Request, res: Response): void => {
   }
 
   try {
-    const { user, token } = loginUser(email, password)
+    const { user, token } = await loginUser(email, password)
     res.json({ success: true, user, token })
   } catch (err) {
     res.status(401).json({ success: false, error: (err as Error).message })
   }
 })
 
-/**
- * GET /api/auth/me
- * Header: Authorization: Bearer <token>
- */
-router.get('/me', (req: Request, res: Response): void => {
+router.get('/me', async (req: Request, res: Response): Promise<void> => {
   const userId = extractUserId(req.headers.authorization)
 
   if (!userId) {
@@ -73,7 +54,7 @@ router.get('/me', (req: Request, res: Response): void => {
     return
   }
 
-  const user = getUserById(userId)
+  const user = await getUserById(userId)
   if (!user) {
     res.status(401).json({ success: false, error: '用户不存在' })
     return
