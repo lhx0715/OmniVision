@@ -20,7 +20,7 @@ router.use(requireAuth)
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
-  const { sourceQuery, entityName, entityType, cardType, cardPayload } = req.body ?? {}
+  const { sourceQuery, entityName, entityType, cardType, cardPayload, folderId } = req.body ?? {}
 
   if (!sourceQuery || !entityName || !cardType || !cardPayload) {
     res.status(400).json({ success: false, error: '缺少必要字段' })
@@ -34,6 +34,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       data: {
         id,
         userId,
+        folderId: folderId || null,
         sourceQuery,
         entityName,
         entityType: entityType || null,
@@ -60,11 +61,15 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
-  const { cardType, entityType, q } = req.query
+  const { cardType, entityType, q, folderId } = req.query
 
   let where: Record<string, unknown> = { userId }
   if (cardType) where.cardType = cardType
   if (entityType) where.entityType = entityType
+  // folderId 过滤：'null' 字符串 = 未分类；不传 = 全部
+  if (folderId !== undefined) {
+    where.folderId = folderId === 'null' ? null : folderId
+  }
 
   const items = await prisma.knowledgeItem.findMany({
     where,

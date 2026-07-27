@@ -1,4 +1,5 @@
 import { useState, type FormEvent, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Fingerprint, Mail, Lock, User, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { cn } from '@/lib/utils';
@@ -87,7 +88,7 @@ export default function AuthDialog({ open, onClose, onSuccess }: AuthDialogProps
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[150] flex items-center justify-center px-4">
       {/* 遮罩 */}
       <div
@@ -231,6 +232,7 @@ export default function AuthDialog({ open, onClose, onSuccess }: AuthDialogProps
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

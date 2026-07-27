@@ -18,13 +18,13 @@ import {
 import { useAuthStore } from '@/store/auth';
 import { useExploreStore, type ExpSession } from '@/store/explore';
 import { cn } from '@/lib/utils';
+import UserMenu from '@/components/UserMenu';
 
 type FilterMode = 'all' | 'active' | 'archived';
 
 export default function GraphLibrary() {
   const navigate = useNavigate();
   const authUser = useAuthStore((s) => s.user);
-  const restoreSession = useAuthStore((s) => s.restoreSession);
   const authLoading = useAuthStore((s) => s.loading);
 
   const sessions = useExploreStore((s) => s.sessions);
@@ -38,10 +38,6 @@ export default function GraphLibrary() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (authLoading) restoreSession();
-  }, [authLoading, restoreSession]);
 
   const reload = useCallback(async () => {
     if (!authUser) return;
@@ -164,6 +160,7 @@ export default function GraphLibrary() {
             <FolderPlus className="h-3 w-3" />
             新探索
           </button>
+          <UserMenu />
         </div>
       </header>
 

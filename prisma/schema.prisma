@@ -17,16 +17,53 @@ model User {
 }
 
 model KnowledgeItem {
-  id          String  @id @default(dbgenerated("gen_random_uuid()"))
-  userId      String  @map("user_id")
-  sourceQuery String  @map("source_query")
-  entityName  String  @map("entity_name")
-  entityType  String? @map("entity_type")
-  cardType    String  @map("card_type")
-  cardPayload String  @map("card_payload")
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId      String   @map("user_id")
+  folderId    String?  @map("folder_id")
+  sourceQuery String   @map("source_query")
+  entityName  String   @map("entity_name")
+  entityType  String?  @map("entity_type")
+  cardType    String   @map("card_type")
+  cardPayload String   @map("card_payload")
   savedAt     DateTime @default(now()) @map("saved_at")
 
+  folder      KnowledgeFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
   @@map("knowledge_items")
+}
+
+model KnowledgeFolder {
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId      String   @map("user_id")
+  name        String
+  description String?
+  color       String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  items       KnowledgeItem[]
+  graph       KnowledgeGraph?
+
+  @@unique([userId, name])
+  @@map("knowledge_folders")
+}
+
+model KnowledgeGraph {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId        String   @map("user_id")
+  folderId      String   @unique @map("folder_id")
+  nodesJson     String   @map("nodes_json")
+  edgesJson     String   @map("edges_json")
+  nodeCount     Int      @default(0) @map("node_count")
+  edgeCount     Int      @default(0) @map("edge_count")
+  sourceCardIds String   @map("source_card_ids")
+  version       Int      @default(1)
+  generatedAt   DateTime @default(now()) @map("generated_at")
+
+  folder        KnowledgeFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@map("knowledge_graphs")
 }
 
 model Entity {

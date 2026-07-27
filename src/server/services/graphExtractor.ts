@@ -183,25 +183,65 @@ async function getOrCreateRelation(
   })
 }
 
-export async function extractGraphFromCard(userId: string, card: CardContext): Promise<void> {
-  const { sourceQuery, entityName, entityType, cardType, cardPayload } = card
+/**
+ * 内存节点 / 边结构 — 不写库，供 folder 级图谱聚合复用
+ */
+export interface MemoryNode {
+  label: string
+  entityType: string | null
+  sourceQuery: string | null
+  isMain: boolean
+}
 
-  const mainEntityId = await getOrCreateEntity(userId, entityName, entityType ?? 'ITEM', sourceQuery)
+export interface MemoryEdge {
+  from: string
+  to: string
+  relation: string
+  sourceCardType: string | null
+  sourceQuery: string | null
+}
+
+/**
+ * 纯函数版本：从卡片抽取实体/关系到内存结构，不写库。
+ * 既有 extractGraphFromCard 在其上做"写库"封装。
+ */
+export async function extractCardGraphToMemory(card: CardContext): Promise<{ nodes: MemoryNode[]; edges: MemoryEdge[] }> {
+  const { sourceQuery, entityName, entityType, cardType, cardPayload } = card
+  const mainLabel = entityName.trim()
+  const nodes: MemoryNode[] = []
+  const edges: MemoryEdge[] = []
+
+  // 辅助：添加节点（按 label 去重）
+  const addNode = (label: string, et: string | null, isMain: boolean) => {
+    const trimmed = label.trim()
+    if (!trimmed) return
+    if (nodes.some((n) => n.label === trimmed)) return
+    nodes.push({ label: trimmed, entityType: et, sourceQuery, isMain })
+  }
+
+  // 辅助：添加边
+  const addEdge = (from: string, to: string, relation: string, sourceCardType: string) => {
+    const f = from.trim()
+    const t = to.trim()
+    if (!f || !t || !relation.trim()) return
+    edges.push({ from: f, to: t, relation: relation.trim(), sourceCardType, sourceQuery })
+  }
+
+  // 主实体
+  addNode(mainLabel, entityType ?? null, true)
 
   switch (cardType) {
-    case 'verdict': {
+    case 'verdict':
       break
-    }
 
     case 'timeline': {
       const payload = cardPayload as TimelineCardData
       if (!payload.events) break
-
       for (const event of payload.events) {
         const eventTitle = event.title?.trim()
-        if (eventTitle && eventTitle !== entityName) {
-          const eventId = await getOrCreateEntity(userId, eventTitle, 'EVENT', sourceQuery)
-          await getOrCreateRelation(userId, mainEntityId, eventId, `时序·${event.year || '未知'}`, 'timeline', sourceQuery)
+        if (eventTitle && eventTitle !== mainLabel) {
+          addNode(eventTitle, 'EVENT', false)
+          addEdge(mainLabel, eventTitle, `时序·${event.year || '未知'}`, 'timeline')
         }
       }
       break
@@ -210,41 +250,27 @@ export async function extractGraphFromCard(userId: string, card: CardContext): P
     case 'gameplay': {
       const payload = cardPayload as GameplayCardData
       if (!payload.stakeholders) break
-
-      const stakeholderMap = new Map<string, string>()
       for (const s of payload.stakeholders) {
         const name = s.name?.trim()
-        if (!name) continue
-        if (name === entityName) {
-          stakeholderMap.set(name, mainEntityId)
-          continue
-        }
-        const eid = await getOrCreateEntity(userId, name, null, sourceQuery)
-        stakeholderMap.set(name, eid)
+        if (!name || name === mainLabel) continue
+        addNode(name, null, false)
       }
-
       if (payload.relations) {
         for (const rel of payload.relations) {
           const fromName = rel.from?.trim()
           const toName = rel.to?.trim()
           const relType = rel.relation?.trim()
           if (!fromName || !toName || !relType) continue
-
-          const fromId = stakeholderMap.get(fromName) ?? (await getOrCreateEntity(userId, fromName, null, sourceQuery))
-          const toId = stakeholderMap.get(toName) ?? (await getOrCreateEntity(userId, toName, null, sourceQuery))
-
-          await getOrCreateRelation(userId, fromId, toId, relType, 'gameplay', sourceQuery)
+          addNode(fromName, null, false)
+          addNode(toName, null, false)
+          addEdge(fromName, toName, relType, 'gameplay')
         }
       }
-
-      for (const [name, eid] of stakeholderMap) {
-        if (eid === mainEntityId) continue
-        const hasEdge = await prisma.relation.findUnique({
-          where: { userId_fromEntityId_toEntityId_relationType: { userId, fromEntityId: mainEntityId, toEntityId: eid, relationType: '关联' } },
-        })
-        if (!hasEdge) {
-          await getOrCreateRelation(userId, mainEntityId, eid, '关联', 'gameplay', sourceQuery)
-        }
+      // 主实体与每个 stakeholder 的"关联"边（getOrCreateRelation 在写库时去重）
+      for (const s of payload.stakeholders) {
+        const name = s.name?.trim()
+        if (!name || name === mainLabel) continue
+        addEdge(mainLabel, name, '关联', 'gameplay')
       }
       break
     }
@@ -252,12 +278,11 @@ export async function extractGraphFromCard(userId: string, card: CardContext): P
     case 'darkside': {
       const payload = cardPayload as DarksideCardData
       if (!payload.controversies) break
-
       for (const c of payload.controversies) {
         const title = c.title?.trim()
         if (!title) continue
-        const eventId = await getOrCreateEntity(userId, title, 'EVENT', sourceQuery)
-        await getOrCreateRelation(userId, mainEntityId, eventId, '争议', 'darkside', sourceQuery)
+        addNode(title, 'EVENT', false)
+        addEdge(mainLabel, title, '争议', 'darkside')
       }
       break
     }
@@ -267,14 +292,40 @@ export async function extractGraphFromCard(userId: string, card: CardContext): P
       break
   }
 
+  // LLM 语义抽取
   const llmRelations = await extractRelationsViaLLM(card)
   for (const r of llmRelations) {
-    const fromId = await getOrCreateEntity(userId, r.from, r.fromType, sourceQuery)
-    const toId = await getOrCreateEntity(userId, r.to, r.toType, sourceQuery)
-    await getOrCreateRelation(userId, fromId, toId, r.relation, 'llm', sourceQuery)
+    addNode(r.from, r.fromType, false)
+    addNode(r.to, r.toType, false)
+    addEdge(r.from, r.to, r.relation, 'llm')
   }
   if (llmRelations.length > 0) {
     console.log(`[graphExtractor] LLM 语义抽取: ${llmRelations.length} 条关系`)
+  }
+
+  return { nodes, edges }
+}
+
+export async function extractGraphFromCard(userId: string, card: CardContext): Promise<void> {
+  const { sourceQuery, entityName, entityType, cardType } = card
+
+  // 复用纯函数版本：拿到内存结构后再写库
+  const { nodes: memNodes, edges: memEdges } = await extractCardGraphToMemory(card)
+
+  // 为每个节点创建/获取全局实体（主实体类型优先用 card.entityType）
+  const idMap = new Map<string, string>()
+  for (const n of memNodes) {
+    const et = n.isMain ? (entityType ?? 'ITEM') : (n.entityType ?? 'ITEM')
+    const eid = await getOrCreateEntity(userId, n.label, et, n.sourceQuery ?? sourceQuery)
+    idMap.set(n.label, eid)
+  }
+
+  // 为每条边创建/获取全局关系（getOrCreateRelation 内部按 unique 约束去重）
+  for (const e of memEdges) {
+    const fromId = idMap.get(e.from)
+    const toId = idMap.get(e.to)
+    if (!fromId || !toId) continue
+    await getOrCreateRelation(userId, fromId, toId, e.relation, e.sourceCardType ?? 'llm', e.sourceQuery ?? sourceQuery)
   }
 
   console.log(`[graphExtractor] 图谱更新: entity=${entityName}, cardType=${cardType}`)

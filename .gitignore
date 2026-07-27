@@ -37,3 +37,9 @@ data/
 
 # 根目录工作笔记（产品思考/分析，非代码资产）
 /*.txt
+
+# 测试用 token / 凭据（敏感信息，严禁提交）
+scripts/test-token.txt
+
+# Trae IDE 工作文档（计划/分析，非项目代码资产）
+.trae/

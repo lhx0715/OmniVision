@@ -21,6 +21,7 @@ import compareRoutes from './routes/compare.js'
 import libraryRoutes from './routes/library.js'
 import graphRoutes from './routes/graph.js'
 import exploreRoutes from './routes/explore.js'
+import folderRoutes from './routes/folders.js'
 
 // for esm mode
 const __filename = fileURLToPath(import.meta.url)
@@ -49,6 +50,7 @@ app.use('/api/compare', compareRoutes)
 app.use('/api/library', libraryRoutes)
 app.use('/api/graph', graphRoutes)
 app.use('/api/explore', exploreRoutes)
+app.use('/api/folders', folderRoutes)
 
 /**
  * health

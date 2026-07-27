@@ -22,6 +22,7 @@ import { useExploreStore } from '@/store/explore';
 import { cn } from '@/lib/utils';
 import AskDockPanel from '@/components/AskDockPanel';
 import BacktrackSlider from '@/components/BacktrackSlider';
+import UserMenu from '@/components/UserMenu';
 import 'reactflow/dist/style.css';
 
 // ===== 实体类型配色 =====
@@ -275,7 +276,6 @@ function ExploreInner() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const authUser = useAuthStore((s) => s.user);
-  const restoreSession = useAuthStore((s) => s.restoreSession);
   const authLoading = useAuthStore((s) => s.loading);
   const reactFlow = useReactFlow();
 
@@ -287,10 +287,6 @@ function ExploreInner() {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newSeedLabel, setNewSeedLabel] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (authLoading) restoreSession();
-  }, [authLoading, restoreSession]);
 
   // ===== 初始化：从 query 参数创建会话 或 加载已有会话 =====
   useEffect(() => {
@@ -904,6 +900,7 @@ function ExploreInner() {
               存入知识库
             </button>
           )}
+          <UserMenu />
         </div>
       </header>
 

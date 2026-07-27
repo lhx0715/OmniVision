@@ -2,25 +2,25 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookMarked, LayoutList, LayoutGrid, Search, Trash2,
-  Fingerprint, FolderOpen, Network, Loader2, FileText, Calendar,
-  ShieldAlert, Inbox,
+  Fingerprint, FolderOpen, FolderPlus, Network, Loader2, FileText, Calendar,
+  ShieldAlert, Inbox, ChevronRight,
 } from 'lucide-react';
 import { useAuthStore, authFetch } from '@/store/auth';
 import { cn } from '@/lib/utils';
 import LibraryCardDetail from '@/components/LibraryCardDetail';
+import UserMenu from '@/components/UserMenu';
 import type { CardType, EntityType, CardData } from '@/types';
 
 // ===== 类型与卡片元数据（提取至 src/lib/cardMeta.ts，避免与 LibraryCardDetail 循环依赖） =====
 
 import { CARD_META, ENTITY_LABELS } from '@/lib/cardMeta';
-import type { KnowledgeItem } from '@/lib/cardMeta';
+import type { KnowledgeItem, FolderSummary } from '@/lib/cardMeta';
 
 // ===== 主组件 =====
 
 export default function Library() {
   const navigate = useNavigate();
   const authUser = useAuthStore((s) => s.user);
-  const restoreSession = useAuthStore((s) => s.restoreSession);
   const authLoading = useAuthStore((s) => s.loading);
 
   const [items, setItems] = useState<KnowledgeItem[]>([]);
@@ -31,10 +31,12 @@ export default function Library() {
   const [stats, setStats] = useState({ totalItems: 0, totalEntities: 0, totalRelations: 0 });
   const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
 
-  // 恢复会话
-  useEffect(() => {
-    if (authLoading) restoreSession();
-  }, [authLoading, restoreSession]);
+  // 文件夹分类
+  const [folders, setFolders] = useState<FolderSummary[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<string | 'all' | 'null'>('all');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [creatingFolderLoading, setCreatingFolderLoading] = useState(false);
 
   // 加载知识库数据
   const loadItems = useCallback(async () => {
@@ -44,6 +46,7 @@ export default function Library() {
       const params = new URLSearchParams();
       if (filterCardType !== 'all') params.set('cardType', filterCardType);
       if (searchQuery) params.set('q', searchQuery);
+      if (activeFolderId !== 'all') params.set('folderId', activeFolderId);
       const res = await authFetch(`/api/library?${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -54,7 +57,7 @@ export default function Library() {
     } finally {
       setLoading(false);
     }
-  }, [authUser, filterCardType, searchQuery]);
+  }, [authUser, filterCardType, searchQuery, activeFolderId]);
 
   // 加载统计
   const loadStats = useCallback(async () => {
@@ -70,6 +73,20 @@ export default function Library() {
     }
   }, [authUser]);
 
+  // 加载文件夹列表
+  const loadFolders = useCallback(async () => {
+    if (!authUser) return;
+    try {
+      const res = await authFetch('/api/folders');
+      if (res.ok) {
+        const data = await res.json();
+        setFolders(data.folders || []);
+      }
+    } catch {
+      // ignore
+    }
+  }, [authUser]);
+
   useEffect(() => {
     loadItems();
   }, [loadItems]);
@@ -77,6 +94,44 @@ export default function Library() {
   useEffect(() => {
     loadStats();
   }, [loadStats]);
+
+  useEffect(() => {
+    loadFolders();
+  }, [loadFolders]);
+
+  // 新建文件夹
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name || creatingFolderLoading) return;
+    setCreatingFolderLoading(true);
+    try {
+      const res = await authFetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFolders((prev) => [...prev, data.folder]);
+        setNewFolderName('');
+        setCreatingFolder(false);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setCreatingFolderLoading(false);
+    }
+  };
+
+  const handleCreateFolderKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleCreateFolder();
+    } else if (e.key === 'Escape') {
+      setCreatingFolder(false);
+      setNewFolderName('');
+    }
+  };
 
   // 删除条目
   const handleDelete = async (id: string) => {
@@ -162,6 +217,7 @@ export default function Library() {
             <FolderOpen className="h-3 w-3" />
             探索图谱
           </button>
+          <UserMenu />
         </div>
       </header>
 
@@ -237,24 +293,153 @@ export default function Library() {
         </div>
       </div>
 
-      {/* 内容区 */}
-      <main className="relative z-10 flex-1 p-6">
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-5 w-5 text-cyan-400 animate-spin" />
+      {/* 内容区 — 两栏：左侧文件夹侧边栏 + 右侧卡片列表 */}
+      <main className="relative z-10 flex-1 flex">
+        {/* 左侧文件夹侧边栏 */}
+        <aside className="w-56 shrink-0 border-r border-white/[0.03] p-3 space-y-0.5 overflow-y-auto">
+          <div className="px-2 pb-2 pt-1 flex items-center gap-1.5">
+            <FolderOpen className="h-3 w-3 text-zinc-600" />
+            <span className="text-[9px] font-mono text-zinc-600 tracking-widest uppercase">FOLDERS · 分类</span>
           </div>
-        ) : items.length === 0 ? (
-          <EmptyState />
-        ) : viewMode === 'list' ? (
-          <ListView items={items} onDelete={handleDelete} onSelect={setSelectedItem} />
-        ) : (
-          <GridView items={items} onDelete={handleDelete} onSelect={setSelectedItem} />
-        )}
+
+          <FolderNavItem
+            icon={<Inbox className="h-3.5 w-3.5" />}
+            label="全部"
+            count={stats.totalItems}
+            active={activeFolderId === 'all'}
+            onClick={() => setActiveFolderId('all')}
+          />
+          <FolderNavItem
+            icon={<FileText className="h-3.5 w-3.5" />}
+            label="未分类"
+            count={null}
+            active={activeFolderId === 'null'}
+            onClick={() => setActiveFolderId('null')}
+          />
+
+          {folders.length > 0 && <div className="h-px bg-white/[0.04] my-2" />}
+
+          {folders.map((f) => (
+            <FolderNavItem
+              key={f.id}
+              icon={<FolderOpen className="h-3.5 w-3.5" />}
+              label={f.name}
+              count={f.itemCount}
+              hasGraph={!!f.graph}
+              active={activeFolderId === f.id}
+              onClick={() => setActiveFolderId(f.id)}
+              onOpen={() => navigate(`/folder/${f.id}`)}
+            />
+          ))}
+
+          {/* 新建文件夹 */}
+          {creatingFolder ? (
+            <div className="flex items-center gap-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/[0.04] px-2 py-1.5 mt-1 animate-fade-in">
+              <FolderPlus className="h-3 w-3 text-cyan-400 shrink-0" />
+              <input
+                autoFocus
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={handleCreateFolderKeyDown}
+                placeholder="名称..."
+                className="flex-1 min-w-0 bg-transparent text-[11px] text-zinc-100 placeholder:text-zinc-600 font-mono outline-none tracking-wider"
+              />
+              {creatingFolderLoading ? (
+                <Loader2 className="h-3 w-3 text-cyan-400 animate-spin shrink-0" />
+              ) : null}
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setCreatingFolder(true);
+                setNewFolderName('');
+              }}
+              className="w-full flex items-center gap-1.5 rounded-md border border-dashed border-white/10 px-2 py-1.5 mt-1 text-[10px] font-mono text-zinc-600 hover:text-cyan-300 hover:border-cyan-500/30 transition-colors tracking-wider uppercase"
+            >
+              <FolderPlus className="h-3 w-3" />
+              新建文件夹
+            </button>
+          )}
+        </aside>
+
+        {/* 右侧卡片列表 */}
+        <div className="flex-1 p-6 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="h-5 w-5 text-cyan-400 animate-spin" />
+            </div>
+          ) : items.length === 0 ? (
+            <EmptyState />
+          ) : viewMode === 'list' ? (
+            <ListView items={items} onDelete={handleDelete} onSelect={setSelectedItem} />
+          ) : (
+            <GridView items={items} onDelete={handleDelete} onSelect={setSelectedItem} />
+          )}
+        </div>
       </main>
 
       {/* 卡片回看层 — 点击条目复现原始卡片完整内容 */}
       {selectedItem && (
         <LibraryCardDetail item={selectedItem} onClose={() => setSelectedItem(null)} />
+      )}
+    </div>
+  );
+}
+
+// ===== 文件夹侧边栏项 =====
+
+function FolderNavItem({
+  icon,
+  label,
+  count,
+  hasGraph,
+  active,
+  onClick,
+  onOpen,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count: number | null;
+  hasGraph?: boolean;
+  active: boolean;
+  onClick: () => void;
+  onOpen?: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      className={cn(
+        'group/folder flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-all',
+        active
+          ? 'bg-cyan-500/10 border border-cyan-500/30'
+          : 'border border-transparent hover:bg-white/[0.03] hover:border-white/[0.04]',
+      )}
+    >
+      <span className={cn('shrink-0', active ? 'text-cyan-300' : 'text-zinc-500')}>{icon}</span>
+      <span className={cn('flex-1 truncate text-[11px] font-mono tracking-wider', active ? 'text-zinc-100' : 'text-zinc-400')}>
+        {label}
+      </span>
+      {hasGraph && (
+        <span
+          className="shrink-0 h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_rgba(139,92,246,0.6)]"
+          title="已生成知识图谱"
+        />
+      )}
+      {count !== null && count > 0 && (
+        <span className="shrink-0 text-[9px] font-mono text-zinc-600">{count}</span>
+      )}
+      {onOpen && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          className="shrink-0 opacity-0 group-hover/folder:opacity-100 text-zinc-600 hover:text-cyan-300 transition-all"
+          title="打开文件夹"
+        >
+          <ChevronRight className="h-3 w-3" />
+        </button>
       )}
     </div>
   );

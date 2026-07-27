@@ -54,13 +54,19 @@ router.get('/me', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
-  const user = await getUserById(userId)
-  if (!user) {
-    res.status(401).json({ success: false, error: '用户不存在' })
-    return
+  // 必须 try/catch：Express 4 不会自动捕获 async 路由的 rejection，
+  // 否则 Prisma 连接错误会冒泡为 unhandledRejection 导致进程崩溃。
+  try {
+    const user = await getUserById(userId)
+    if (!user) {
+      res.status(401).json({ success: false, error: '用户不存在' })
+      return
+    }
+    res.json({ success: true, user })
+  } catch (err) {
+    console.error('[auth/me] query failed:', (err as Error).message)
+    res.status(500).json({ success: false, error: '数据库暂时不可用，请稍后重试' })
   }
-
-  res.json({ success: true, user })
 })
 
 export default router

@@ -34,3 +34,25 @@ export const ENTITY_LABELS: Record<string, string> = {
   EVENT: '事件',
   ITEM: '事物',
 };
+
+/** 文件夹图谱元信息（已生成时非空） */
+export interface FolderGraphMeta {
+  id: string;
+  nodeCount: number;
+  edgeCount: number;
+  version: number;
+  generatedAt: string;
+}
+
+/** 知识库文件夹摘要 — 与后端 GET /api/folders 返回结构对齐 */
+export interface FolderSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  itemCount: number;
+  graph: FolderGraphMeta | null;
+}

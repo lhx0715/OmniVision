@@ -125,6 +125,52 @@ async function main() {
       answer TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- 知识库文件夹分类（单层，不嵌套）
+    CREATE TABLE IF NOT EXISTS knowledge_folders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      color VARCHAR(50),
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, name)
+    );
+
+    -- 文件夹级知识图谱快照（1:1 with folder）
+    CREATE TABLE IF NOT EXISTS knowledge_graphs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      folder_id UUID UNIQUE NOT NULL REFERENCES knowledge_folders(id) ON DELETE CASCADE,
+      nodes_json TEXT NOT NULL,
+      edges_json TEXT NOT NULL,
+      node_count INTEGER DEFAULT 0,
+      edge_count INTEGER DEFAULT 0,
+      source_card_ids TEXT NOT NULL,
+      version INTEGER DEFAULT 1,
+      generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- knowledge_items 新增 folder_id 列（兼容旧数据，NULL = 未分类）
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='knowledge_items' AND column_name='folder_id') THEN
+        ALTER TABLE knowledge_items ADD COLUMN folder_id UUID;
+      END IF;
+    END$$;
+
+    -- knowledge_items.folder_id 外键（删 folder 时卡片 folder_id 置 NULL）
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='knowledge_items_folder_id_fkey') THEN
+        ALTER TABLE knowledge_items
+          ADD CONSTRAINT knowledge_items_folder_id_fkey
+          FOREIGN KEY (folder_id) REFERENCES knowledge_folders(id) ON DELETE SET NULL;
+      END IF;
+    END$$;
   `;
 
   try {

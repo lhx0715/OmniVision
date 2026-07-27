@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Radar, AlertCircle, X, Fingerprint, Crosshair, Archive, BookMarked, LogOut, ChevronRight, Network } from 'lucide-react';
+import { Radar, AlertCircle, X, Fingerprint, Crosshair, Archive, BookMarked, Network } from 'lucide-react';
 import { useOmniVisionStore } from '@/store/omnivision';
 import { useAuthStore } from '@/store/auth';
 import { useSSE } from '@/hooks/useSSE';
@@ -19,7 +19,7 @@ import StreamingIndicator from '@/components/StreamingIndicator';
 import ArchiveUnsealTransition from '@/components/ArchiveUnsealTransition';
 import RiskToast from '@/components/RiskToast';
 import BlockedView from '@/components/BlockedView';
-import AuthDialog from '@/components/AuthDialog';
+import UserMenu from '@/components/UserMenu';
 import { saveArchiveEntry } from '@/lib/archive';
 import { detectCompare } from '@/lib/compare';
 import { localDictCheck } from '../../shared/riskDict';
@@ -78,24 +78,8 @@ export default function Home() {
   const setArchiveOpen = useOmniVisionStore((s) => s.setArchiveOpen);
   const compareMode = useOmniVisionStore((s) => s.compareMode);
 
-  // 认证状态
+  // 认证状态（会话恢复由 App.tsx 全局负责，避免页面 HMR 重复触发 net::ERR_ABORTED）
   const authUser = useAuthStore((s) => s.user);
-  const restoreSession = useAuthStore((s) => s.restoreSession);
-  const logout = useAuthStore((s) => s.logout);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-
-  // 启动时恢复会话
-  useEffect(() => {
-    restoreSession();
-  }, [restoreSession]);
-
-  // 监听收藏按钮的登录引导事件
-  useEffect(() => {
-    const handler = () => setAuthOpen(true);
-    window.addEventListener('omnivision:auth-required', handler);
-    return () => window.removeEventListener('omnivision:auth-required', handler);
-  }, []);
 
   const { start, startCompare } = useSSE();
   useKeyboardNav();
@@ -301,55 +285,8 @@ export default function Home() {
             <span>档案库</span>
           </button>
 
-          {/* 用户入口 */}
-          {authUser ? (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-1 text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.05]"
-              >
-                <span className="h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 grid place-items-center text-[8px] text-emerald-300">
-                  {(authUser.displayName || authUser.email)[0].toUpperCase()}
-                </span>
-                <span className="hidden sm:inline max-w-[80px] truncate">
-                  {authUser.displayName || authUser.email.split('@')[0]}
-                </span>
-              </button>
-              {userMenuOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-white/10 bg-zinc-950/95 backdrop-blur-xl py-1 shadow-xl animate-fade-in">
-                    <div className="px-3 py-2 border-b border-white/[0.06]">
-                      <p className="text-[10px] text-zinc-600 font-mono tracking-wider uppercase">已认证</p>
-                      <p className="text-xs text-zinc-300 truncate mt-0.5">{authUser.email}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        logout();
-                        setUserMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-zinc-400 hover:text-rose-300 hover:bg-rose-500/[0.04] transition-colors"
-                    >
-                      <LogOut className="h-3.5 w-3.5" />
-                      退出登录
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAuthOpen(true)}
-              className="flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-300 transition-colors hover:border-emerald-500/50 hover:bg-emerald-500/20"
-            >
-              <Fingerprint className="h-3 w-3" />
-              <span>登录 / 注册</span>
-              <ChevronRight className="h-3 w-3" />
-            </button>
-          )}
+          {/* 用户入口 — 登录/注册 + 退出登录（共享组件，任意页面可复用） */}
+          <UserMenu />
         </div>
       </header>
 
@@ -495,9 +432,6 @@ export default function Home() {
 
       {/* C2 历史档案抽屉 */}
       <ArchiveDrawer onSelect={handleArchiveSelect} />
-
-      {/* 认证弹窗 */}
-      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
 
       {/* 机密档案解封过渡动画 */}
       {transitioning && (
