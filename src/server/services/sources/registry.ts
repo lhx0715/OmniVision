@@ -69,6 +69,17 @@ export function getActiveAdapters(
   const active = ALL_ADAPTERS.filter(
     (a) => isConfigured(a.name) && (dimension ? a.supports(entityType, dimension) : true),
   )
+  // 诊断日志：显示哪些源被激活、哪些被跳过及原因（供 Vercel logs 排查"只有一个源"问题）
+  const skipped = ALL_ADAPTERS.filter((a) => !active.includes(a)).map((a) => {
+    if (!isConfigured(a.name)) return `${a.name}(未配置key)`
+    if (dimension && !a.supports(entityType, dimension)) return `${a.name}(维度${dimension}不支持)`
+    return a.name
+  })
+  console.log(
+    `[sources] getActiveAdapters: 激活 [${active.map((a) => a.name).join(', ')}]` +
+    (skipped.length > 0 ? ` | 跳过 [${skipped.join(', ')}]` : '') +
+    (dimension ? ` | dim=${dimension}` : ' | dim=全维度'),
+  )
   if (active.length === 0) {
     // 全部未配置时，降级到完全免费的 DuckDuckGo（无需 key），保证召回不归零
     console.warn('[sources] 无可用适配器，降级为 duckduckgo-only')
@@ -108,6 +119,8 @@ export async function searchAll(
   const bySource: Record<string, number> = {}
   const images: string[] = []
   let answer: string | undefined
+  // 诊断汇总：记录每个源的最终结果（成功docs数/图片数/失败原因/熔断跳过）
+  const diagLog: string[] = []
 
   settled.forEach((s, i) => {
     const name = adapters[i].name
@@ -120,12 +133,25 @@ export async function searchAll(
         }
       }
       if (s.value.answer && !answer) answer = s.value.answer
+      const imgCount = s.value.images?.length ?? 0
+      diagLog.push(
+        s.value.docs.length > 0
+          ? `${name}✓(${s.value.docs.length}docs${imgCount > 0 ? `/${imgCount}img` : ''})`
+          : `${name}空(0docs${imgCount > 0 ? `/${imgCount}img` : ''})`,
+      )
     } else {
-      console.warn(`[sources] ${name} 召回失败:`, (s.reason as Error)?.message)
+      const reason = (s.reason as Error)?.message ?? 'unknown'
+      console.warn(`[sources] ${name} 召回失败:`, reason)
       perSource.push({ source: name, docs: [] })
       bySource[name] = 0
+      diagLog.push(`${name}✗(${reason.slice(0, 60)})`)
     }
   })
+
+  // 汇总诊断日志：一次 searchAll 调用的全源结果快照
+  console.log(
+    `[sources] searchAll "${query.slice(0, 30)}" → ${diagLog.join(' | ')}`,
+  )
 
   const fused = rrfFuse(perSource)
   const { docs, sourceMap } = dedupe(fused)

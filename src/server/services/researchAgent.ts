@@ -429,11 +429,12 @@ const FINALIZE_SYSTEM_PROMPT = `你是「全知视野」情报引擎。基于已
 
 ## 输出要求
 1. 结果指向：不讲废话，直接剥离修饰词，提炼硬核数据
-2. 反向视角（强制）：必须在 darkside 中揭示争议、硬伤
+2. 反向视角（强制）：必须在 darkside 中揭示争议、硬伤。**controversies 至少 4 条，最多 12 条**，覆盖争议、失败、投诉、法律、道德、财务、产品硬伤等多维角度
 3. 零废话：禁止"基于您的要求""综上所述"等污染 UI 的词汇
 4. 数据优先：achievements 必须包含可量化的硬核指标
 5. 博弈视角：gameplay 必须揭示各方利益诉求与底层逻辑
 6. 趋势数据（可选）：无明确量化趋势数据时返回空数组
+7. **时间线数量**（强制）：timeline.events **至少 8 条，最多 20 条**，覆盖起点、成长、关键转折、巅峰、挫折、现状等所有重要节点，不得少于 8 条
 
 ## 输出 JSON
 {
@@ -612,24 +613,30 @@ export async function runResearchAgent(
     })
 
     // === Action：多源并行召回 + RRF 融合 + 去重（PRD-01）===
-    const adapters = getActiveAdapters(state.entityType)
     let recall: RecallResult
     try {
       if (plans && plans.length > 0) {
         // 首轮六维并行：每个维度独立 searchAll，合并结果
-        const searchOpts = {
-          entityType: state.entityType,
-          includeDomains: state.includeDomains,
-          excludeDomains: state.excludeDomains,
-          maxResults: MAX_RESULTS_PER_SEARCH,
-        }
+        // ⚠️ 必须传 dimension：① 让 exa/github 等按维度过滤的适配器正确参与/跳过
+        //    ② 让 makeCacheKey 的 d= 字段正确区分维度，避免跨维度缓存误命中
+        // 每个维度独立 getActiveAdapters(entityType, dimension)，避免对不支持的维度
+        // 调用 exa/github（浪费配额、易触发限流熔断拖累后续轮次）
         // 并发限流：12 维同时请求会压垮 Exa（429）/GitHub（403）免费档
         // 策略：每批 CONCURRENCY 个并行，批间无延迟（allSettled 自然等待）
         const DIM_CONCURRENCY = 4
         const dimResults = await runWithConcurrency(
           plans,
           DIM_CONCURRENCY,
-          (p) => searchAll(p.query, searchOpts, adapters),
+          (p) => {
+            const dimAdapters = getActiveAdapters(state.entityType, p.dimension)
+            return searchAll(p.query, {
+              entityType: state.entityType,
+              dimension: p.dimension,
+              includeDomains: state.includeDomains,
+              excludeDomains: state.excludeDomains,
+              maxResults: MAX_RESULTS_PER_SEARCH,
+            }, dimAdapters)
+          },
         )
         const fulfilled: RecallResult[] = []
         const coveredDimsThisRound = new Set<Dimension>()
@@ -654,13 +661,14 @@ export async function runResearchAgent(
         for (const d of coveredDimsThisRound) coveredDims.add(d)
         console.log(`[agent] 六维并行召回完成: ${fulfilled.length}/${plans.length} 维成功, ${recall.docs.length} 文档, 覆盖 ${coveredDimsThisRound.size} 维`)
       } else {
-        // 后续轮单一查询
+        // 后续轮单一查询（补搜缺口维度，不限定 dimension 以最大化召回）
+        const fallbackAdapters = getActiveAdapters(state.entityType)
         recall = await searchAll(searchQuery, {
           entityType: state.entityType,
           includeDomains: state.includeDomains,
           excludeDomains: state.excludeDomains,
           maxResults: MAX_RESULTS_PER_SEARCH,
-        }, adapters)
+        }, fallbackAdapters)
       }
     } catch (err) {
       console.warn(`[agent] 多源召回失败:`, (err as Error).message)
