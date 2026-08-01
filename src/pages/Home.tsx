@@ -22,8 +22,9 @@ import BlockedView from '@/components/BlockedView';
 import UserMenu from '@/components/UserMenu';
 import { saveArchiveEntry } from '@/lib/archive';
 import { detectCompare } from '@/lib/compare';
+import { saveResultSnapshot, getResultSnapshot, type ResultSnapshot } from '@/lib/resultCache';
 import { localDictCheck } from '../../shared/riskDict';
-import type { ClarifyOption, EntityType } from '@/types';
+import type { CardType, CardData, ClarifyOption, EntityType } from '@/types';
 
 /** 雷达扫描装饰 SVG */
 function RadarSweep() {
@@ -64,6 +65,29 @@ function RadarSweep() {
   );
 }
 
+/**
+ * 瞬时恢复快照到 store 并切换到 results 阶段，跳过 SSE 重新搜索。
+ * 调用前应已 setQuery / setEntityType（与 handleArchiveSelect/handleNavigate 一致）。
+ * 先 clearCards 清空旧状态（含 compare/agent/sources/images 全量重置），
+ * 再逐张回填卡片与信源数据，最后落定到 results 阶段。
+ */
+function restoreFromSnapshot(snapshot: ResultSnapshot): void {
+  const s = useOmniVisionStore.getState();
+  s.clearCards();
+  s.resetAgentTimeline();
+  // 逐张回填卡片，复用 addCard 逻辑保持 store 一致性（streamingCards 已为空，filter 无副作用）
+  for (const [type, data] of Object.entries(snapshot.cards)) {
+    s.addCard(type as CardType, data as CardData);
+  }
+  s.setSources(snapshot.sources);
+  s.setImages(snapshot.images);
+  s.setSourceStats(snapshot.sourceStats);
+  s.setEntityType(snapshot.entityType);
+  s.setEngineMode(snapshot.engineMode);
+  s.setStreamingCards([]);
+  s.setPhase('results');
+}
+
 export default function Home() {
   const phase = useOmniVisionStore((s) => s.phase);
   const error = useOmniVisionStore((s) => s.error);
@@ -81,7 +105,7 @@ export default function Home() {
   // 认证状态（会话恢复由 App.tsx 全局负责，避免页面 HMR 重复触发 net::ERR_ABORTED）
   const authUser = useAuthStore((s) => s.user);
 
-  const { start, startCompare } = useSSE();
+  const { start, startCompare, abort } = useSSE();
   useKeyboardNav();
   const [transitioning, setTransitioning] = useState(false);
 
@@ -146,17 +170,30 @@ export default function Home() {
     start(tag, et ?? undefined);
   };
 
-  // B2 面包屑回溯 — 返回历史条目并重新搜索
+  // B2 面包屑回溯 — 返回历史条目：命中前端快照则瞬时恢复，否则重新搜索
   const handleNavigate = (query: string, entityType: EntityType | null) => {
     setQuery(query);
+    const snapshot = getResultSnapshot(query, entityType);
+    if (snapshot) {
+      // 终止可能在途的 SSE，避免残留事件覆盖快照恢复
+      abort();
+      restoreFromSnapshot(snapshot);
+      return;
+    }
     start(query, entityType ?? undefined);
   };
 
-  // C2 档案回看 — 触发新搜索并入栈
+  // C2 档案回看 — 命中前端快照则瞬时恢复（跳过 SSE 重搜与加载动画），否则触发新搜索并入栈
   const handleArchiveSelect = (query: string, entityType: EntityType | null) => {
     setQuery(query);
     if (entityType) setEntityType(entityType);
     useOmniVisionStore.getState().pushHistory(query, entityType);
+    const snapshot = getResultSnapshot(query, entityType);
+    if (snapshot) {
+      abort();
+      restoreFromSnapshot(snapshot);
+      return;
+    }
     start(query, entityType ?? undefined);
   };
 
@@ -177,7 +214,7 @@ export default function Home() {
     () => `OV-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9000) + 1000)}`,
   );
 
-  // C2 — 搜索完成时（phase 变为 results）自动入库
+  // C2 — 搜索完成时（phase 变为 results）自动入库 + 存前端结果快照
   // 用 ref 记录已归档的 query，避免 results 阶段重复渲染时重复入库
   const archivedQueryRef = useRef<string | null>(null);
   useEffect(() => {
@@ -192,6 +229,19 @@ export default function Home() {
       engineMode: state.engineMode === 'live' ? 'live' : 'mock',
       timestamp: Date.now(),
     });
+    // 存前端结果快照：仅单实体搜索（对比模式状态结构不同，跳过），
+    // 供档案库 / 面包屑回溯时瞬时恢复，跳过 SSE 重新搜索
+    if (!state.compareMode) {
+      saveResultSnapshot({
+        query: state.query,
+        entityType: state.entityType,
+        engineMode: state.engineMode,
+        cards: state.cards,
+        sources: state.sources,
+        images: state.images,
+        sourceStats: state.sourceStats,
+      });
+    }
   }, [phase]);
 
   // 进入新一轮搜索时清空归档标记
