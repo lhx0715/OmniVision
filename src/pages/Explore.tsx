@@ -15,13 +15,14 @@ import ReactFlow, {
 } from 'reactflow';
 import {
   ArrowLeft, Network, Loader2, ShieldAlert,
-  Circle, Share2, Plus, FolderOpen, Archive,
+  Circle, Share2, Plus, FolderOpen, Archive, Download,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { useExploreStore } from '@/store/explore';
 import { cn } from '@/lib/utils';
 import AskDockPanel from '@/components/AskDockPanel';
 import BacktrackSlider from '@/components/BacktrackSlider';
+import ExportGraphDialog from '@/components/ExportGraphDialog';
 import UserMenu from '@/components/UserMenu';
 import 'reactflow/dist/style.css';
 
@@ -286,6 +287,7 @@ function ExploreInner() {
   const [initError, setInitError] = useState<string | null>(null);
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newSeedLabel, setNewSeedLabel] = useState('');
+  const [exportOpen, setExportOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // ===== 初始化：从 query 参数创建会话 或 加载已有会话 =====
@@ -318,7 +320,10 @@ function ExploreInner() {
             navigate(`/explore?sessionId=${session.id}`, { replace: true });
           }
         } else {
-          // 无参数 → 加载会话列表，让用户选择或新建
+          // 无参数（如从"新探索"按钮进入）→ 清空当前会话状态，
+          // 避免残留的 currentSession 导致直接展示上一次观看的档案，
+          // 让用户能进入"开启一次探索"界面输入新种子并创建新的原始节点
+          store.reset();
           await store.loadSessions();
         }
       } catch (err) {
@@ -900,6 +905,14 @@ function ExploreInner() {
               存入知识库
             </button>
           )}
+          {/* 导出按钮 */}
+          <button
+            onClick={() => setExportOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] px-2.5 py-1 text-[10px] font-mono text-violet-300 hover:bg-violet-500/15 transition-colors"
+          >
+            <Download className="h-3 w-3" />
+            导出
+          </button>
           <UserMenu />
         </div>
       </header>
@@ -943,6 +956,16 @@ function ExploreInner() {
 
       {/* 底部追问框 */}
       <AskDockPanel />
+
+      {/* 导出图谱弹窗 */}
+      {exportOpen && currentSession && (
+        <ExportGraphDialog
+          onClose={() => setExportOpen(false)}
+          containerRef={containerRef}
+          reactFlow={reactFlow}
+          sessionTitle={currentSession.title}
+        />
+      )}
     </div>
   );
 }

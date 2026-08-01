@@ -24,6 +24,16 @@ if (!process.env.VERCEL) {
     console.log(`Server ready on port ${PORT}`);
   });
 
+  // 处理端口占用等监听错误，避免无声崩溃
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[server] 端口 ${PORT} 已被占用，可能已有另一个后端实例在运行。请先停止旧进程（如关闭其他 npm run dev）再重启。`);
+    } else {
+      console.error('[server] 监听错误:', err.message);
+    }
+    process.exit(1);
+  });
+
   process.on('SIGTERM', () => {
     console.log('SIGTERM signal received');
     server.close(() => {

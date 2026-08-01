@@ -19,48 +19,58 @@ router.use(requireAuth)
 
 /**
  * 列出当前用户所有文件夹（含每个文件夹的卡片数、是否已生成图谱）
+ *
+ * 注意：必须 try/catch —— Express 4 不会自动捕获 async 路由的 rejection，
+ * 否则 Supabase 空闲连接被回收时 prisma.findMany 抛错会冒泡为 unhandledRejection，
+ * 且响应永远不发出，前端 Library 的 loadFolders 会一直挂起，
+ * 表现为"新建的文件夹无法同步到知识库文件夹分类"。
  */
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
-  const folders = await prisma.knowledgeFolder.findMany({
-    where: { userId },
-    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-    include: {
-      _count: { select: { items: true } },
-      graph: {
-        select: {
-          id: true,
-          nodeCount: true,
-          edgeCount: true,
-          version: true,
-          generatedAt: true,
+  try {
+    const folders = await prisma.knowledgeFolder.findMany({
+      where: { userId },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      include: {
+        _count: { select: { items: true } },
+        graph: {
+          select: {
+            id: true,
+            nodeCount: true,
+            edgeCount: true,
+            version: true,
+            generatedAt: true,
+          },
         },
       },
-    },
-  })
+    })
 
-  res.json({
-    success: true,
-    folders: folders.map((f) => ({
-      id: f.id,
-      name: f.name,
-      description: f.description,
-      color: f.color,
-      sortOrder: f.sortOrder,
-      createdAt: f.createdAt.toISOString(),
-      updatedAt: f.updatedAt.toISOString(),
-      itemCount: f._count.items,
-      graph: f.graph
-        ? {
-            id: f.graph.id,
-            nodeCount: f.graph.nodeCount,
-            edgeCount: f.graph.edgeCount,
-            version: f.graph.version,
-            generatedAt: f.graph.generatedAt.toISOString(),
-          }
-        : null,
-    })),
-  })
+    res.json({
+      success: true,
+      folders: folders.map((f) => ({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        color: f.color,
+        sortOrder: f.sortOrder,
+        createdAt: f.createdAt.toISOString(),
+        updatedAt: f.updatedAt.toISOString(),
+        itemCount: f._count.items,
+        graph: f.graph
+          ? {
+              id: f.graph.id,
+              nodeCount: f.graph.nodeCount,
+              edgeCount: f.graph.edgeCount,
+              version: f.graph.version,
+              generatedAt: f.graph.generatedAt.toISOString(),
+            }
+          : null,
+      })),
+    })
+  } catch (err) {
+    console.error('[folders] 列表查询失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '文件夹列表暂时不可用，请稍后重试' })
+  }
 })
 
 /**
@@ -104,7 +114,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       res.status(409).json({ success: false, error: '同名文件夹已存在' })
       return
     }
-    res.status(500).json({ success: false, error: err.message })
+    console.error('[folders] 新建失败:', err.message)
+    res.status(500).json({ success: false, error: '文件夹创建失败，请稍后重试' })
   }
 })
 
@@ -133,7 +144,8 @@ router.patch('/:id', async (req: Request, res: Response): Promise<void> => {
       res.status(409).json({ success: false, error: '同名文件夹已存在' })
       return
     }
-    res.status(500).json({ success: false, error: err.message })
+    console.error('[folders] 更新失败:', err.message)
+    res.status(500).json({ success: false, error: '文件夹更新失败，请稍后重试' })
   }
 })
 
@@ -144,12 +156,17 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
   const { id } = req.params
 
-  const result = await prisma.knowledgeFolder.deleteMany({ where: { id, userId } })
-  if (result.count === 0) {
-    res.status(404).json({ success: false, error: '文件夹不存在或无权操作' })
-    return
+  try {
+    const result = await prisma.knowledgeFolder.deleteMany({ where: { id, userId } })
+    if (result.count === 0) {
+      res.status(404).json({ success: false, error: '文件夹不存在或无权操作' })
+      return
+    }
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[folders] 删除失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '文件夹删除失败，请稍后重试' })
   }
-  res.json({ success: true })
 })
 
 /**
@@ -159,30 +176,35 @@ router.get('/:id/items', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
   const { id } = req.params
 
-  // 校验文件夹归属
-  const folder = await prisma.knowledgeFolder.findUnique({ where: { id } })
-  if (!folder || folder.userId !== userId) {
-    res.status(404).json({ success: false, error: '文件夹不存在或无权操作' })
-    return
+  try {
+    // 校验文件夹归属
+    const folder = await prisma.knowledgeFolder.findUnique({ where: { id } })
+    if (!folder || folder.userId !== userId) {
+      res.status(404).json({ success: false, error: '文件夹不存在或无权操作' })
+      return
+    }
+
+    const items = await prisma.knowledgeItem.findMany({
+      where: { userId, folderId: id },
+      orderBy: { savedAt: 'desc' },
+    })
+
+    res.json({
+      success: true,
+      items: items.map((item) => ({
+        id: item.id,
+        sourceQuery: item.sourceQuery,
+        entityName: item.entityName,
+        entityType: item.entityType,
+        cardType: item.cardType,
+        cardPayload: JSON.parse(item.cardPayload),
+        savedAt: item.savedAt.toISOString(),
+      })),
+    })
+  } catch (err) {
+    console.error('[folders] 卡片列表查询失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '文件夹卡片暂时不可用，请稍后重试' })
   }
-
-  const items = await prisma.knowledgeItem.findMany({
-    where: { userId, folderId: id },
-    orderBy: { savedAt: 'desc' },
-  })
-
-  res.json({
-    success: true,
-    items: items.map((item) => ({
-      id: item.id,
-      sourceQuery: item.sourceQuery,
-      entityName: item.entityName,
-      entityType: item.entityType,
-      cardType: item.cardType,
-      cardPayload: JSON.parse(item.cardPayload),
-      savedAt: item.savedAt.toISOString(),
-    })),
-  })
 })
 
 /**
@@ -212,12 +234,17 @@ router.get('/:id/graph', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
   const { id } = req.params
 
-  const graph = await getFolderGraph(userId, id)
-  if (!graph) {
-    res.json({ success: true, graph: null })
-    return
+  try {
+    const graph = await getFolderGraph(userId, id)
+    if (!graph) {
+      res.json({ success: true, graph: null })
+      return
+    }
+    res.json({ success: true, graph })
+  } catch (err) {
+    console.error('[folders] 图谱快照查询失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '图谱快照暂时不可用，请稍后重试' })
   }
-  res.json({ success: true, graph })
 })
 
 export default router

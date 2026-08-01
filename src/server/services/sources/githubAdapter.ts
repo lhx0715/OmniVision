@@ -1,4 +1,4 @@
-﻿/**
+/**
  * GitHub 适配器（PRD-01 FR-01）
  *
  * GitHub search/repositories：产品/技术热度、Star 增长。
@@ -6,6 +6,7 @@
  * 仅适用于 ITEM 类型且 achievements/trends 维度。
  */
 import type { SourceAdapter, AdapterSearchResult, RawDoc, SearchOpts } from './types.js'
+import { fetchWithTimeout, isAbortError } from '../httpUtils.js'
 
 interface GitHubRepo {
   full_name: string
@@ -49,7 +50,14 @@ export const githubAdapter: SourceAdapter = {
       per_page: String(opts.maxResults ?? DEFAULT_MAX),
     })
 
-    const res = await fetch(`${GITHUB_URL}?${params.toString()}`, { headers })
+    let res: Response
+    try {
+      res = await fetchWithTimeout(`${GITHUB_URL}?${params.toString()}`, { headers }, 15000)
+    } catch (err) {
+      // 超时或网络失败时降级为空，不阻塞主流程
+      console.warn(`[sources] GitHub 搜索${isAbortError(err) ? '超时' : '失败'}:`, (err as Error).message)
+      return { docs: [] }
+    }
     if (!res.ok) {
       // 匿名限流（403）或失败时降级为空，不阻塞主流程
       console.warn(`[sources] GitHub 搜索失败: HTTP ${res.status}`)

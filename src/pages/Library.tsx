@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookMarked, LayoutList, LayoutGrid, Search, Trash2,
   Fingerprint, FolderOpen, FolderPlus, Network, Loader2, FileText, Calendar,
-  ShieldAlert, Inbox, ChevronRight,
+  ShieldAlert, Inbox, ChevronRight, AlertCircle,
 } from 'lucide-react';
 import { useAuthStore, authFetch } from '@/store/auth';
 import { cn } from '@/lib/utils';
@@ -37,6 +37,7 @@ export default function Library() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolderLoading, setCreatingFolderLoading] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
 
   // 加载知识库数据
   const loadItems = useCallback(async () => {
@@ -73,14 +74,24 @@ export default function Library() {
     }
   }, [authUser]);
 
-  // 加载文件夹列表
+  // 加载文件夹列表（失败时短延迟重试一次，应对 Supabase 空闲连接被回收的瞬态错误）
   const loadFolders = useCallback(async () => {
     if (!authUser) return;
-    try {
+    const doFetch = async (): Promise<boolean> => {
       const res = await authFetch('/api/folders');
       if (res.ok) {
         const data = await res.json();
         setFolders(data.folders || []);
+        return true;
+      }
+      return false;
+    };
+    try {
+      const ok = await doFetch();
+      // 首次失败 → 500ms 后重试一次（后端 try/catch 现在会快速返回 500 而非挂起）
+      if (!ok) {
+        await new Promise((r) => setTimeout(r, 500));
+        await doFetch();
       }
     } catch {
       // ignore
@@ -99,11 +110,23 @@ export default function Library() {
     loadFolders();
   }, [loadFolders]);
 
+  // 窗口重新获得焦点时刷新文件夹列表 —— 跨标签页/切回标签时同步他处新建的文件夹
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === 'visible') {
+        loadFolders();
+      }
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, [loadFolders]);
+
   // 新建文件夹
   const handleCreateFolder = async () => {
     const name = newFolderName.trim();
     if (!name || creatingFolderLoading) return;
     setCreatingFolderLoading(true);
+    setFolderError(null);
     try {
       const res = await authFetch('/api/folders', {
         method: 'POST',
@@ -115,9 +138,13 @@ export default function Library() {
         setFolders((prev) => [...prev, data.folder]);
         setNewFolderName('');
         setCreatingFolder(false);
+      } else {
+        // 后端返回错误（如 401 未登录 / 409 同名冲突 / 500 服务器错误）
+        setFolderError(data.error || '创建失败，请重试');
       }
     } catch {
-      // ignore
+      // 网络异常（后端未运行 / 代理失败）
+      setFolderError('网络异常，请检查后端服务是否运行');
     } finally {
       setCreatingFolderLoading(false);
     }
@@ -360,6 +387,14 @@ export default function Library() {
               <FolderPlus className="h-3 w-3" />
               新建文件夹
             </button>
+          )}
+
+          {/* 创建文件夹错误提示 */}
+          {folderError && (
+            <div className="flex items-start gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/[0.04] px-2 py-1.5 mt-1 animate-fade-in">
+              <AlertCircle className="h-3 w-3 text-rose-400 shrink-0 mt-0.5" />
+              <span className="text-[10px] text-rose-300 font-mono leading-relaxed">{folderError}</span>
+            </div>
           )}
         </aside>
 

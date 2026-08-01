@@ -69,10 +69,17 @@ function parseSSEData(rawEvent: string): Record<string, unknown> | null {
 /**
  * 解析单条 SSE 事件并写入 store
  * @param target 'A' = 主实体（默认），'B' = 对比模式第二实体
+ * @param onProgress 收到有意义事件（非心跳/非解析失败）时的回调，用于看门狗计时
  */
-function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
+function handleEvent(
+  rawEvent: string,
+  target: 'A' | 'B' = 'A',
+  onProgress?: () => void,
+) {
   const parsed = parseSSEData(rawEvent);
   if (!parsed) return;
+  // 已确认是真实 data 事件（非 ':' 心跳），通知看门狗重置 stall 计时
+  onProgress?.();
 
   const evt = parsed as unknown as SSEEvent;
   const store = useOmniVisionStore.getState();
@@ -199,13 +206,17 @@ function handleEvent(rawEvent: string, target: 'A' | 'B' = 'A') {
 }
 
 /** 消费 SSE buffer：按 \n\n 分割事件并逐条处理，返回剩余未完成的片段 */
-function consumeBuffer(buffer: string, target: 'A' | 'B'): string {
+function consumeBuffer(
+  buffer: string,
+  target: 'A' | 'B',
+  onProgress?: () => void,
+): string {
   let remaining = buffer;
   let sep: number;
   while ((sep = remaining.indexOf('\n\n')) !== -1) {
     const rawEvent = remaining.slice(0, sep);
     remaining = remaining.slice(sep + 2);
-    handleEvent(rawEvent, target);
+    handleEvent(rawEvent, target, onProgress);
   }
   return remaining;
 }
@@ -215,6 +226,7 @@ async function readSSEStream(
   res: Response,
   target: 'A' | 'B',
   onBuffer?: (remaining: string) => void,
+  onProgress?: () => void,
 ): Promise<void> {
   const body = res.body;
   if (!body) return;
@@ -226,13 +238,13 @@ async function readSSEStream(
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    buffer = consumeBuffer(buffer, target);
+    buffer = consumeBuffer(buffer, target, onProgress);
   }
 
   // 处理流末尾残留内容
   buffer += decoder.decode();
   if (buffer.trim()) {
-    handleEvent(buffer, target);
+    handleEvent(buffer, target, onProgress);
   }
   onBuffer?.(buffer);
 }
@@ -244,6 +256,8 @@ async function readSSEStream(
 export function useSSE() {
   const abortRef = useRef<AbortController | null>(null);
   const completedRef = useRef<boolean>(true);
+  // 看门狗：watchdogFiredRef 标记是否由看门狗触发的 abort（区别于用户主动 abort）
+  const watchdogFiredRef = useRef<boolean>(false);
 
   const start = useCallback(async (query: string, entityType?: EntityType) => {
     // 仅终止未完成的请求，避免对已完成的请求触发 ERR_ABORTED
@@ -254,6 +268,7 @@ export function useSSE() {
     const controller = new AbortController();
     abortRef.current = controller;
     completedRef.current = false;
+    watchdogFiredRef.current = false;
 
     const store = useOmniVisionStore.getState();
     store.setError(null);
@@ -263,6 +278,27 @@ export function useSSE() {
     store.setStreamingCards([...ALL_CARD_TYPES]);
     store.resetAgentTimeline();
     store.setSourceStats(null);
+
+    // ===== 流式看门狗 =====
+    // 后端心跳（': keepalive'）不计入进度；仅真实 data 事件更新 lastEventTime。
+    // 60s 无任何真实事件 = 后端 stall（如 LLM 调用挂起未被超时兜底），主动 abort 并回 idle。
+    const STALL_TIMEOUT_MS = 60000;
+    const lastEventAt = { time: Date.now() };
+    const onProgress = () => {
+      lastEventAt.time = Date.now();
+    };
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastEventAt.time > STALL_TIMEOUT_MS) {
+        console.warn(`[sse] 搜索 ${STALL_TIMEOUT_MS / 1000}s 无进度事件，判定后端 stall，主动中断`);
+        watchdogFiredRef.current = true;
+        const s = useOmniVisionStore.getState();
+        s.setError('搜索超时，请重试');
+        s.setStreamingCards([]);
+        s.resetAgentTimeline();
+        s.setPhase('idle');
+        controller.abort();
+      }
+    }, 5000);
 
     let buffer = '';
 
@@ -294,16 +330,21 @@ export function useSSE() {
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
           const rawEvent = buffer.slice(0, sep);
           buffer = buffer.slice(sep + 2);
-          handleEvent(rawEvent);
+          handleEvent(rawEvent, 'A', onProgress);
         }
       }
 
       // 处理流末尾残留内容
       buffer += decoder.decode();
       if (buffer.trim()) {
-        handleEvent(buffer);
+        handleEvent(buffer, 'A', onProgress);
       }
     } catch (err) {
+      // 看门狗触发的 abort：已在看门狗里完成 error/phase 处理，这里只收尾
+      if (watchdogFiredRef.current) {
+        completedRef.current = true;
+        return;
+      }
       if ((err as Error).name === 'AbortError') {
         completedRef.current = true;
         return;
@@ -314,6 +355,7 @@ export function useSSE() {
       s.setStreamingCards([]);
       s.setPhase('idle');
     } finally {
+      clearInterval(watchdog);
       completedRef.current = true;
       if (abortRef.current === controller) {
         abortRef.current = null;
@@ -335,6 +377,7 @@ export function useSSE() {
     const controller = new AbortController();
     abortRef.current = controller;
     completedRef.current = false;
+    watchdogFiredRef.current = false;
 
     const store = useOmniVisionStore.getState();
     store.setError(null);
@@ -348,6 +391,26 @@ export function useSSE() {
     store.setStreamingCards([...ALL_CARD_TYPES]);
     store.setStreamingCardsB([...ALL_CARD_TYPES]);
     store.setAgentProgress(null);
+
+    // ===== 流式看门狗（同 start：60s 无真实事件判定 stall）=====
+    const STALL_TIMEOUT_MS = 60000;
+    const lastEventAt = { time: Date.now() };
+    const onProgress = () => {
+      lastEventAt.time = Date.now();
+    };
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastEventAt.time > STALL_TIMEOUT_MS) {
+        console.warn(`[sse] 对比搜索 ${STALL_TIMEOUT_MS / 1000}s 无进度事件，判定后端 stall，主动中断`);
+        watchdogFiredRef.current = true;
+        const s = useOmniVisionStore.getState();
+        s.setError('搜索超时，请重试');
+        s.setStreamingCards([]);
+        s.setStreamingCardsB([]);
+        s.resetAgentTimeline();
+        s.setPhase('idle');
+        controller.abort();
+      }
+    }, 5000);
 
     try {
       // 并发发起两个搜索请求
@@ -379,9 +442,14 @@ export function useSSE() {
 
       // 并发消费两个 SSE 流（allSettled：单个失败不阻断另一个）
       await Promise.allSettled([
-        readSSEStream(resA, 'A'),
-        readSSEStream(resB, 'B'),
+        readSSEStream(resA, 'A', undefined, onProgress),
+        readSSEStream(resB, 'B', undefined, onProgress),
       ]);
+
+      // 看门狗触发 → 已回 idle，直接收尾
+      if (watchdogFiredRef.current) {
+        return;
+      }
 
       // 某一侧被风控拦截 → 已进入 blocked 结果态，短路跳过对比摘要生成
       const state = useOmniVisionStore.getState();
@@ -399,6 +467,11 @@ export function useSSE() {
 
       useOmniVisionStore.getState().setPhase('results');
     } catch (err) {
+      // 看门狗触发的 abort：已处理 error/phase，只收尾
+      if (watchdogFiredRef.current) {
+        completedRef.current = true;
+        return;
+      }
       if ((err as Error).name === 'AbortError') {
         completedRef.current = true;
         return;
@@ -411,6 +484,7 @@ export function useSSE() {
       s.resetAgentTimeline();
       s.setPhase('idle');
     } finally {
+      clearInterval(watchdog);
       completedRef.current = true;
       if (abortRef.current === controller) {
         abortRef.current = null;

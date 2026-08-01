@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SSE 搜索端点
  * POST /api/search
  * 流式推送情报卡片
@@ -13,6 +13,7 @@ import { hasLLM } from '../services/llmEngine.js'
 import { generateIntelCards as mockGenerate } from '../services/mockEngine.js'
 import { generateIntelCardsWithAgent } from '../services/llmEngine.js'
 import { classifyIntent } from '../services/riskGuard.js'
+import { makeFinalCacheKey, getFinalCached, setFinalCache } from '../services/finalCardCache.js'
 
 const router = Router()
 
@@ -108,7 +109,33 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
   }, 2000)
 
+  // 全链路缓存 key：query + entityType + 风控 domain 白/黑名单
+  // 提到 try 外定义，供 try 命中查询与 catch 过期缓存兜底共用
+  const finalCacheKey = makeFinalCacheKey(query, finalType, {
+    includeDomains: intent.includeDomains,
+    excludeDomains: intent.excludeDomains,
+  })
+
   try {
+    // ===== 全链路缓存查询：命中则跳过 Agent，瞬时返回（0 次 LLM/搜索 API 调用）=====
+    // 比赛场景下评委/多用户搜同一批热词，第二次起秒级返回，是承载优化的核心。
+    const cached = await getFinalCached(finalCacheKey)
+    if (cached) {
+      console.log(`[search] 全链路缓存命中: ${query.slice(0, 30)}，跳过 Agent`)
+      clearInterval(heartbeat)
+      if (cached.sources.length > 0) safeWrite({ sources: cached.sources })
+      if (cached.sourceStats) safeWrite({ source_stats: cached.sourceStats })
+      if (cached.images.length > 0) safeWrite({ images: cached.images })
+      for (const card of cached.cards) {
+        if (closed) break
+        await sleep(randomDelay())
+        if (closed) break
+        safeWrite({ cardType: card.cardType, payload: card.payload })
+      }
+      if (!closed) safeWrite({ done: true, entityType: finalType, cached: true })
+      return
+    }
+
     // ===== Agent 模式（LLM 可用时）：ReAct 多轮研究 =====
     // 每步通过 SSE 推送 agent_step 进度事件，前端进度条据此动态更新
     let cards: IntelCard[]
@@ -174,13 +201,28 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     // 推送完成事件
     if (!closed) {
       safeWrite({ done: true, entityType: finalType })
+      // 写入全链路缓存，供后续相同查询命中（0 次 LLM/搜索 API 即可返回）
+      await setFinalCache(finalCacheKey, query, finalType, { cards, sources, images, sourceStats })
     }
   } catch (err) {
     clearInterval(heartbeat)
     const message = err instanceof Error ? err.message : '生成情报卡片失败'
 
-    // LLM 模式失败 → 自动降级到 mockEngine
-    if (hasLLM()) {
+    // 降级兜底链：① 过期缓存（LLM/搜索全失败时保底有真实内容可推）→ ② mockEngine
+    const staleCached = await getFinalCached(finalCacheKey, true)
+    if (staleCached) {
+      console.warn('[search] Agent 失败，使用过期缓存兜底:', message)
+      if (!closed && staleCached.sources.length > 0) safeWrite({ sources: staleCached.sources })
+      if (!closed && staleCached.sourceStats) safeWrite({ source_stats: staleCached.sourceStats })
+      if (!closed && staleCached.images.length > 0) safeWrite({ images: staleCached.images })
+      for (const card of staleCached.cards) {
+        if (closed) break
+        await sleep(randomDelay())
+        if (closed) break
+        safeWrite({ cardType: card.cardType, payload: card.payload })
+      }
+      if (!closed) safeWrite({ done: true, entityType: finalType })
+    } else if (hasLLM()) {
       console.warn('[search] LLM 引擎失败，降级到 mockEngine:', message)
       try {
         const { cards: fallbackCards, sources: fallbackSources, images: fallbackImages } = await mockGenerate(query, finalType)

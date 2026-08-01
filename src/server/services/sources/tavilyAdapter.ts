@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Tavily 适配器（PRD-01 FR-01）
  *
  * 从 researchAgent.ts 的 tavilySearch 迁移而来。保留 advanced 深度、
@@ -7,6 +7,7 @@
  */
 import type { IntelSource } from '@shared/types.js'
 import type { SourceAdapter, AdapterSearchResult, RawDoc, SearchOpts } from './types.js'
+import { fetchWithTimeout, isAbortError } from '../httpUtils.js'
 
 interface TavilyResult {
   title: string
@@ -51,11 +52,17 @@ export const tavilyAdapter: SourceAdapter = {
       body.exclude_domains = opts.excludeDomains
     }
 
-    const res = await fetch(TAVILY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    let res: Response
+    try {
+      res = await fetchWithTimeout(TAVILY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, 15000)
+    } catch (err) {
+      console.warn(`[sources] Tavily 搜索${isAbortError(err) ? '超时' : '失败'}:`, (err as Error).message)
+      return { docs: [], images: [] }
+    }
     if (!res.ok) {
       console.warn(`[sources] Tavily 搜索失败: HTTP ${res.status}`)
       return { docs: [], images: [] }

@@ -126,6 +126,18 @@ async function main() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 全链路结果缓存（承载优化）：命中后 0 次 LLM/搜索 API 调用
+    CREATE TABLE IF NOT EXISTS final_card_cache (
+      cache_key VARCHAR(500) PRIMARY KEY,
+      query VARCHAR(500) NOT NULL,
+      entity_type VARCHAR(50) NOT NULL,
+      cards_json TEXT NOT NULL,
+      sources_json TEXT NOT NULL,
+      images_json TEXT NOT NULL,
+      source_stats_json TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- 知识库文件夹分类（单层，不嵌套）
     CREATE TABLE IF NOT EXISTS knowledge_folders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

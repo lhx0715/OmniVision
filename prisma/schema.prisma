@@ -156,7 +156,7 @@ model ExplorationStep {
 }
 
 model SearchCache {
-  cacheKey   String   @id
+  cacheKey   String   @id @map("cache_key")
   query      String
   source     String
   dimension  String?
@@ -166,4 +166,20 @@ model SearchCache {
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@map("search_cache")
+}
+
+/// 全链路结果缓存：缓存 ReAct Agent 最终生成的情报卡片 + 数据源 + 图片。
+/// key = sha256(query + entityType + 风控 domain 白/黑名单)，TTL 与 SearchCache 一致（24h）。
+/// 命中后一次搜索 0 次 LLM 调用、0 次外部搜索 API，仅 1 次数据库读取。
+model FinalCardCache {
+  cacheKey       String   @id @map("cache_key")
+  query          String
+  entityType     String   @map("entity_type")
+  cardsJson      String   @map("cards_json")
+  sourcesJson    String   @map("sources_json")
+  imagesJson     String   @map("images_json")
+  sourceStatsJson String? @map("source_stats_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("final_card_cache")
 }

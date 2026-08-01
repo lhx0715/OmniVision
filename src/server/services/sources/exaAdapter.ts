@@ -1,10 +1,11 @@
-﻿/**
+/**
  * Exa 适配器（PRD-01 FR-01）
  *
  * Exa neural search：语义/研究/话题簇发现，对学生/科普/事件脉络强。
  * 无 EXA_API_KEY 时自动降级返回空（registry 会跳过）。
  */
 import type { SourceAdapter, AdapterSearchResult, RawDoc, SearchOpts, Dimension } from './types.js'
+import { fetchWithTimeout, isAbortError } from '../httpUtils.js'
 
 interface ExaSearchResult {
   title?: string
@@ -42,14 +43,20 @@ export const exaAdapter: SourceAdapter = {
       type: 'neural',
     }
 
-    const res = await fetch(EXA_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify(body),
-    })
+    let res: Response
+    try {
+      res = await fetchWithTimeout(EXA_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(body),
+      }, 15000)
+    } catch (err) {
+      console.warn(`[sources] Exa 搜索${isAbortError(err) ? '超时' : '失败'}:`, (err as Error).message)
+      return { docs: [] }
+    }
     if (!res.ok) {
       console.warn(`[sources] Exa 搜索失败: HTTP ${res.status}`)
       return { docs: [] }

@@ -1,9 +1,11 @@
-﻿/**
+/**
  * LLM 调用客户端 + JSON 稳健解析（共享底层工具）
  *
  * 从 researchAgent.ts 抽取，供 queryPlanner / confidence / 未来模块复用，
  * 避免与 researchAgent 形成循环依赖。
  */
+import { fetchWithTimeout, isAbortError } from './httpUtils.js'
+
 function cfg() {
   return {
     LLM_API_KEY: process.env.LLM_API_KEY ?? '',
@@ -12,14 +14,20 @@ function cfg() {
   }
 }
 
+/** callLLM 默认超时：30s。DeepSeek 常规响应 3-15s，observeResults(maxTokens=1500) 偶尔接近 20s。 */
+const DEFAULT_LLM_TIMEOUT_MS = 30000
+
 /**
  * 调用 OpenAI 兼容 LLM 接口。
  * 失败抛错，由调用方 catch 兜底。
+ *
+ * @param options.timeoutMs 请求超时（默认 30s）。超时抛 Error('LLM 请求超时')，
+ *   避免网络 stall / 限流不响应导致 Agent 循环永久挂起。
  */
 export async function callLLM(
   systemPrompt: string,
   userPrompt: string,
-  options: { temperature?: number; maxTokens?: number; jsonMode?: boolean } = {},
+  options: { temperature?: number; maxTokens?: number; jsonMode?: boolean; timeoutMs?: number } = {},
 ): Promise<string> {
   const { LLM_API_KEY, LLM_BASE_URL, LLM_MODEL } = cfg()
   if (!LLM_API_KEY) throw new Error('LLM_API_KEY 未配置')
@@ -35,14 +43,24 @@ export async function callLLM(
   if (options.maxTokens) body.max_tokens = options.maxTokens
   if (options.jsonMode) body.response_format = { type: 'json_object' }
 
-  const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${LLM_API_KEY}`,
-    },
-    body: JSON.stringify(body),
-  })
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      `${LLM_BASE_URL}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${LLM_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      },
+      options.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS,
+    )
+  } catch (err) {
+    if (isAbortError(err)) throw new Error('LLM 请求超时')
+    throw err
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => '')

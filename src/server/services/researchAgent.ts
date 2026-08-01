@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 研究主控 Agent (ReAct)
  *
  * 替换原 llmEngine.ts 的单次 Tavily + LLM 流水线。
@@ -40,7 +40,9 @@ function cfg() {
   }
 }
 
-const MAX_STEPS = 3
+// ReAct 最大搜索轮数。比赛默认 2（首轮六维并行已覆盖大部分维度，第 2 轮补搜缺口）。
+// 可通过 REACT_MAX_STEPS 环境变量上调（如复现完整研究链路时设为 3）。
+const MAX_STEPS = Number(process.env.REACT_MAX_STEPS) || 2
 const MAX_RESULTS_PER_SEARCH = 6
 
 // ===== 类型 =====
@@ -226,13 +228,14 @@ async function decideNextAction(state: AgentState): Promise<ActionDecision> {
     .replace('{factsCount}', String(state.knowledgeBase.length))
     .replace('{gaps}', gapsList.join(', ') || '无明显缺口')
 
-  const content = await callLLM(prompt, `目标实体: ${state.query}（类型: ${state.entityType}）`, {
-    temperature: 0.3,
-    maxTokens: 300,
-    jsonMode: true,
-  })
-
+  // callLLM 纳入 try/catch：超时/网络错误与解析失败走同一兜底，避免循环挂起
   try {
+    const content = await callLLM(prompt, `目标实体: ${state.query}（类型: ${state.entityType}）`, {
+      temperature: 0.3,
+      maxTokens: 300,
+      jsonMode: true,
+    })
+
     const parsed = extractJSON(content) as Record<string, unknown>
     const action = parsed.action === 'finalize' ? 'finalize' : 'search'
     return {
@@ -241,8 +244,12 @@ async function decideNextAction(state: AgentState): Promise<ActionDecision> {
       searchQuery: typeof parsed.searchQuery === 'string' ? parsed.searchQuery : state.query,
       searchFocus: typeof parsed.searchFocus === 'string' ? parsed.searchFocus : undefined,
     }
-  } catch {
-    // 解析失败：默认继续搜索或终止
+  } catch (err) {
+    // callLLM 超时/网络错误 或 JSON 解析失败：默认继续搜索或终止
+    console.warn(
+      `[agent] decideNextAction 失败 (step ${state.currentStep}):`,
+      (err as Error).message,
+    )
     if (state.currentStep >= state.maxSteps - 1) {
       return { thought: '达到步数上限，生成卡片', action: 'finalize' }
     }
@@ -304,11 +311,24 @@ async function observeResults(
 
   const userPrompt = `目标: ${query}\n${existingSummary}\n\n## 本次搜索结果\n${searchContext}`
 
-  const content = await callLLM(OBSERVATION_SYSTEM_PROMPT, userPrompt, {
-    temperature: 0.2,
-    maxTokens: 1500,
-    jsonMode: true,
-  })
+  // callLLM 纳入 try/catch：超时/网络错误时返回 insufficient（不阻塞循环继续/终止）
+  let content = ''
+  try {
+    content = await callLLM(OBSERVATION_SYSTEM_PROMPT, userPrompt, {
+      temperature: 0.2,
+      maxTokens: 1500,
+      jsonMode: true,
+    })
+  } catch (err) {
+    console.warn(`[agent] observeResults callLLM 失败:`, (err as Error).message)
+    return {
+      extractedFacts: [],
+      coveredDimensions: [],
+      gaps: ['观察超时'],
+      quality: 'insufficient',
+      needsMoreSearch: false,
+    }
+  }
 
   try {
     const parsed = extractJSON(content) as Record<string, unknown>
@@ -454,6 +474,8 @@ ${searchContext || '（无搜索资料）'}`
   return callLLM(FINALIZE_SYSTEM_PROMPT, userPrompt, {
     temperature: 0.7,
     jsonMode: true,
+    // 最终卡片 JSON 较大（6 张卡片），给 45s 超时；超时抛错由上层降级到单次模式
+    timeoutMs: 45000,
   })
 }
 
@@ -725,7 +747,9 @@ export async function runResearchAgent(
     state.knowledgeBase = crossValidate(state.knowledgeBase)
 
     const newFactsCount = state.knowledgeBase.length - beforeCount
-    if (newFactsCount === 0) {
+    // crossValidate 合并事实可能让总数小于 beforeCount（newFactsCount 为负），
+    // 此种情况同样视为"无新增有效信息"，计入 streak 以触发提前终止，避免循环空转。
+    if (newFactsCount <= 0) {
       state.noNewInfoStreak++
     } else {
       state.noNewInfoStreak = 0

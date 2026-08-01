@@ -71,79 +71,96 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     where.folderId = folderId === 'null' ? null : folderId
   }
 
-  const items = await prisma.knowledgeItem.findMany({
-    where,
-    orderBy: { savedAt: 'desc' },
-  })
+  try {
+    const items = await prisma.knowledgeItem.findMany({
+      where,
+      orderBy: { savedAt: 'desc' },
+    })
 
-  let filtered = items
-  if (q) {
-    const kw = (q as string).toLowerCase()
-    filtered = items.filter(
-      (item) =>
-        item.entityName.toLowerCase().includes(kw) ||
-        item.sourceQuery.toLowerCase().includes(kw) ||
-        item.cardPayload.toLowerCase().includes(kw),
-    )
+    let filtered = items
+    if (q) {
+      const kw = (q as string).toLowerCase()
+      filtered = items.filter(
+        (item) =>
+          item.entityName.toLowerCase().includes(kw) ||
+          item.sourceQuery.toLowerCase().includes(kw) ||
+          item.cardPayload.toLowerCase().includes(kw),
+      )
+    }
+
+    res.json({
+      success: true,
+      items: filtered.map((item) => ({
+        id: item.id,
+        sourceQuery: item.sourceQuery,
+        entityName: item.entityName,
+        entityType: item.entityType,
+        cardType: item.cardType,
+        cardPayload: JSON.parse(item.cardPayload),
+        savedAt: item.savedAt.toISOString(),
+      })),
+    })
+  } catch (err) {
+    // Supabase 空闲连接被回收时 prisma 查询会抛错，Express 4 不会自动捕获，
+    // 必须显式 try/catch 否则响应挂起、前端 Library 列表一直 loading。
+    console.error('[library] 列表查询失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '知识库列表暂时不可用，请稍后重试' })
   }
-
-  res.json({
-    success: true,
-    items: filtered.map((item) => ({
-      id: item.id,
-      sourceQuery: item.sourceQuery,
-      entityName: item.entityName,
-      entityType: item.entityType,
-      cardType: item.cardType,
-      cardPayload: JSON.parse(item.cardPayload),
-      savedAt: item.savedAt.toISOString(),
-    })),
-  })
 })
 
 router.get('/stats', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
 
-  const [total, byCardType, byEntityType, entities, relations] = await Promise.all([
-    prisma.knowledgeItem.count({ where: { userId } }),
-    prisma.knowledgeItem.groupBy({
-      by: ['cardType'],
-      where: { userId },
-      _count: { cardType: true },
-    }),
-    prisma.knowledgeItem.groupBy({
-      by: ['entityType'],
-      where: { userId },
-      _count: { entityType: true },
-    }),
-    prisma.entity.count({ where: { userId } }),
-    prisma.relation.count({ where: { userId } }),
-  ])
+  try {
+    const [total, byCardType, byEntityType, entities, relations] = await Promise.all([
+      prisma.knowledgeItem.count({ where: { userId } }),
+      prisma.knowledgeItem.groupBy({
+        by: ['cardType'],
+        where: { userId },
+        _count: { cardType: true },
+      }),
+      prisma.knowledgeItem.groupBy({
+        by: ['entityType'],
+        where: { userId },
+        _count: { entityType: true },
+      }),
+      prisma.entity.count({ where: { userId } }),
+      prisma.relation.count({ where: { userId } }),
+    ])
 
-  res.json({
-    success: true,
-    stats: {
-      totalItems: total,
-      totalEntities: entities,
-      totalRelations: relations,
-      byCardType: byCardType.reduce((acc, r) => ({ ...acc, [r.cardType]: r._count.cardType }), {}),
-      byEntityType: byEntityType.reduce((acc, r) => ({ ...acc, [r.entityType ?? 'null']: r._count.entityType }), {}),
-    },
-  })
+    res.json({
+      success: true,
+      stats: {
+        totalItems: total,
+        totalEntities: entities,
+        totalRelations: relations,
+        byCardType: byCardType.reduce((acc, r) => ({ ...acc, [r.cardType]: r._count.cardType }), {}),
+        byEntityType: byEntityType.reduce((acc, r) => ({ ...acc, [r.entityType ?? 'null']: r._count.entityType }), {}),
+      },
+    })
+  } catch (err) {
+    console.error('[library] 统计查询失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '统计数据暂时不可用，请稍后重试' })
+  }
 })
 
 router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).userId as string
   const { id } = req.params
 
-  const result = await prisma.knowledgeItem.deleteMany({ where: { id, userId } })
+  try {
+    const result = await prisma.knowledgeItem.deleteMany({ where: { id, userId } })
 
-  if (result.count === 0) {
-    res.status(404).json({ success: false, error: '条目不存在或无权操作' })
-    return
+    if (result.count === 0) {
+      res.status(404).json({ success: false, error: '条目不存在或无权操作' })
+      return
+    }
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[library] 删除失败:', (err as Error).message)
+    res.status(500).json({ success: false, error: '删除失败，请稍后重试' })
   }
-
-  res.json({ success: true })
 })
 
 export default router
