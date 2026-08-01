@@ -6,8 +6,8 @@ import type { TimelineCardData, CardType, CardData } from '@/types';
 import { useExpand } from '@/hooks/useCardInteraction';
 import CardExpansion from '@/components/CardExpansion';
 
-// 每页最多显示的事件数（超过则翻页）
-const EVENTS_PER_PAGE = 8;
+// 每页最多显示的事件数（超过则翻页）—— 降低阈值让分页更早出现，保证用户可感知
+const EVENTS_PER_PAGE = 5;
 
 interface RelatedIntel {
   type: CardType;

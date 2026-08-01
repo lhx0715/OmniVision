@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize2, X, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -16,7 +16,7 @@ const MAX_THUMBNAILS = 9;
 function verifyImage(src: string, timeoutMs = 8000): Promise<boolean> {
   return new Promise((resolve) => {
     // data: 或 blob: URL 默认可用，跳过网络探测
-    if (src.startsWith('data:') || src.startsWith('blob:')) {
+    if (typeof src === 'string' && (src.startsWith('data:') || src.startsWith('blob:'))) {
       resolve(true);
       return;
     }
@@ -49,60 +49,111 @@ function verifyImage(src: string, timeoutMs = 8000): Promise<boolean> {
   });
 }
 
-export default function GalleryCard({ images }: GalleryCardProps) {
-  // 图片验证状态：null = 验证中，true = 通过，false = 失败
-  const [verifyMap, setVerifyMap] = useState<Map<number, boolean>>(new Map());
-  const [verifying, setVerifying] = useState(true);
-  const verifyRunningRef = useRef(false);
+/**
+ * 生成一个轻量级签名：判断 images 是否真正变更（引用/内容变化）。
+ * 用于解决 verifyRunningRef 吞掉后续 SSE 追加图片的问题。
+ */
+function sigOf(arr: string[]): string {
+  if (!arr || arr.length === 0) return '';
+  if (arr.length <= 5) return `${arr.length}:${arr.join('|').slice(0, 200)}`;
+  return `${arr.length}:${arr[0]}|${arr[1]}|…|${arr[arr.length - 1]}`;
+}
 
-  // 对每张图片做预加载验证（images 变化时重新验证）
+export default function GalleryCard({ images }: GalleryCardProps) {
+  const safeImages = useMemo(() => (Array.isArray(images) ? images : []), [images]);
+
+  // 验证结果 Map：原始 images 数组的 index -> true/false
+  const [verifyMap, setVerifyMap] = useState<Map<number, boolean>>(new Map());
+  // 运行时 onError 捕获的失败 src（兜底：极端情况下预验证通过但实际 <img> 加载失败，如 CDN 切换）
+  const [failedSrcs, setFailedSrcs] = useState<Set<string>>(new Set());
+  const [verifying, setVerifying] = useState(true);
+
+  // 用签名追踪批次，允许批次变更时重入验证（防止之前的 verifyRunningRef 吞更新）
+  const currentSig = useMemo(() => sigOf(safeImages), [safeImages]);
+  const activeSigRef = useRef<string>('');
+  const activeBatchRef = useRef<Set<number>>(new Set());
+
+  // 对每张图片做预加载验证（images 签名变化时重新验证未验证的 index）
   useEffect(() => {
-    if (!images || images.length === 0) {
+    const sig = currentSig;
+    if (!sig) {
       setVerifying(false);
       setVerifyMap(new Map());
       return;
     }
-    if (verifyRunningRef.current) return;
-    verifyRunningRef.current = true;
+
     setVerifying(true);
+    // 新批次时清理过时批次的未完成项
+    if (activeSigRef.current !== sig) {
+      activeSigRef.current = sig;
+      activeBatchRef.current = new Set();
+    }
 
     let cancelled = false;
-    const nextMap = new Map<number, boolean>();
+    // 找出需要验证的 index（本批次没在跑的，且 verifyMap 里还没结果的）
+    const pendingIdx: number[] = [];
+    safeImages.forEach((src, i) => {
+      if (verifyMap.has(i)) return; // 已有结果跳过
+      if (activeBatchRef.current.has(i)) return; // 本批次已在跑
+      pendingIdx.push(i);
+      activeBatchRef.current.add(i);
+    });
+
+    if (pendingIdx.length === 0) {
+      // 无新增待验证，保留 verifying（直到所有已经在跑的 settle）— 这里简单处理直接关掉 verifying
+      setVerifying(false);
+      return;
+    }
 
     (async () => {
-      // 并发验证，限制最大并发数为 6
       const concurrency = 6;
-      const queue = images.map((src, i) => ({ src, i }));
+      const queue = pendingIdx.slice();
       const workers: Promise<void>[] = [];
-      for (let w = 0; w < concurrency && queue.length > 0; w++) {
-        const worker = (async () => {
+      const patchMap = new Map<number, boolean>();
+      // 启动并发 worker
+      const spawnWorker = () =>
+        (async () => {
           while (queue.length > 0) {
-            const task = queue.shift()!;
-            const ok = await verifyImage(task.src);
+            const idx = queue.shift()!;
+            const src = safeImages[idx];
+            // eslint-disable-next-line no-await-in-loop
+            const ok = await verifyImage(src);
             if (cancelled) return;
-            nextMap.set(task.i, ok);
-            // 增量更新 UI，让验证通过的图尽早出现
-            setVerifyMap(new Map(nextMap));
+            // 只接受当前批次的结果（防止旧批次结果回写污染）
+            if (activeSigRef.current !== sig) continue;
+            patchMap.set(idx, ok);
+            // 增量刷新 UI：一张一张推进
+            setVerifyMap((prev) => {
+              const next = new Map(prev);
+              for (const [k, v] of patchMap) next.set(k, v);
+              return next;
+            });
           }
         })();
-        workers.push(worker);
+
+      for (let w = 0; w < concurrency && workers.length < queue.length + workers.length; w++) {
+        workers.push(spawnWorker());
       }
       await Promise.all(workers);
-      if (!cancelled) {
-        setVerifyMap(new Map(nextMap));
+      if (!cancelled && activeSigRef.current === sig) {
         setVerifying(false);
       }
-      verifyRunningRef.current = false;
     })();
 
     return () => {
       cancelled = true;
-      verifyRunningRef.current = false;
     };
-  }, [images]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSig]);
 
-  // 基于验证结果，筛选出有效图片，并保持原顺序
-  const validImages = (images || []).filter((_, i) => verifyMap.get(i) === true);
+  // 有效图片 = 预验证通过 且 运行时未出现失败
+  const validImages = useMemo(
+    () =>
+      safeImages.filter(
+        (src, i) => verifyMap.get(i) === true && !failedSrcs.has(src),
+      ),
+    [safeImages, verifyMap, failedSrcs],
+  );
 
   const thumbnails = validImages.slice(0, MAX_THUMBNAILS);
   const hiddenCount = Math.max(0, validImages.length - MAX_THUMBNAILS);
@@ -150,12 +201,22 @@ export default function GalleryCard({ images }: GalleryCardProps) {
     };
   }, [isLightboxOpen, closeLightbox, showPrev, showNext]);
 
+  // 记录运行时加载失败的 src（兜底：预验证通过但实际渲染失败）
+  const handleRuntimeError = useCallback((src: string) => {
+    setFailedSrcs((prev) => {
+      if (prev.has(src)) return prev;
+      const next = new Set(prev);
+      next.add(src);
+      return next;
+    });
+  }, []);
+
   // 没有有效图片（且验证完毕）时不渲染
   if (!verifying && validImages.length === 0) return null;
 
   // 验证中的加载骨架位（防止 empty → 突然出现的闪烁；也让用户感知正在筛图）
   const showSkeleton = verifying && thumbnails.length === 0;
-  const skeletonSlots = Math.min(MAX_THUMBNAILS, (images || []).length || 9);
+  const skeletonSlots = Math.min(MAX_THUMBNAILS, safeImages.length || 9);
 
   return (
     <>
@@ -228,9 +289,11 @@ export default function GalleryCard({ images }: GalleryCardProps) {
                     src={src}
                     alt={`影像 ${i + 1}`}
                     loading="lazy"
-                    // 兜底 onError：极端情况下再次捕获失败（例如预加载时命中缓存，但 CDN 切换导致）
                     onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                      const el = e.currentTarget;
+                      // 双重兜底：隐藏自己 + 同步到 failedSrcs，后续渲染直接剔除
+                      el.style.display = 'none';
+                      handleRuntimeError(src);
                     }}
                     className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                   />
@@ -305,7 +368,9 @@ export default function GalleryCard({ images }: GalleryCardProps) {
             alt={`影像 ${lightboxIndex + 1}`}
             onClick={(e) => e.stopPropagation()}
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+              const el = e.currentTarget;
+              el.style.display = 'none';
+              handleRuntimeError(validImages[lightboxIndex] ?? '');
             }}
             className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain shadow-2xl shadow-violet-500/10 ring-1 ring-violet-500/20"
           />

@@ -13,6 +13,7 @@ import { githubAdapter } from './githubAdapter.js'
 import { searxngAdapter } from './searxngAdapter.js'
 import { serperAdapter } from './serperAdapter.js'
 import { duckduckgoAdapter } from './duckduckgoAdapter.js'
+import { openverseAdapter } from './openverseAdapter.js'
 import { dedupe, normalizeUrl } from '../fusion/dedupe.js'
 import { rrfFuse, DEFAULT_SOURCE_WEIGHTS } from '../fusion/rrf.js'
 import { makeCacheKey, getCached, setCache, cleanExpired } from '../searchCache.js'
@@ -28,6 +29,7 @@ import { isAvailable as isCircuitAvailable } from '../quotaGuard.js'
  *  - exa：1000 次/月（语义搜索，verdict/timeline 等维度增强）
  *  - duckduckgo：完全免费（兜底，Instant Answer）
  *  - github：ITEM 类热度/趋势维度专用
+ *  - openverse：纯图片免费源（docs 空，仅贡献 images，RRF weight=0）
  */
 const ALL_ADAPTERS: SourceAdapter[] = [
   searxngAdapter,
@@ -36,6 +38,7 @@ const ALL_ADAPTERS: SourceAdapter[] = [
   exaAdapter,
   duckduckgoAdapter,
   githubAdapter,
+  openverseAdapter,
 ]
 
 function isConfigured(name: SourceName): boolean {
