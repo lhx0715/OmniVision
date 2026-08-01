@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize2, X, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface GalleryCardProps {
@@ -9,154 +9,32 @@ interface GalleryCardProps {
 // 缩略图网格最多展示 9 张（3×3），其余通过 lightbox 查看
 const MAX_THUMBNAILS = 9;
 
-/**
- * 主动验证图片能否加载（避免显示 broken image）
- * 返回 Promise<boolean>：true = 可加载，false = 失败
- */
-function verifyImage(src: string, timeoutMs = 8000): Promise<boolean> {
-  return new Promise((resolve) => {
-    // data: 或 blob: URL 默认可用，跳过网络探测
-    if (typeof src === 'string' && (src.startsWith('data:') || src.startsWith('blob:'))) {
-      resolve(true);
-      return;
-    }
-    const img = new Image();
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    }, timeoutMs);
-    const cleanup = () => {
-      window.clearTimeout(timer);
-      img.onload = null;
-      img.onerror = null;
-    };
-    img.onload = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(true);
-    };
-    img.onerror = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(false);
-    };
-    img.src = src;
-  });
-}
-
-/**
- * 生成一个轻量级签名：判断 images 是否真正变更（引用/内容变化）。
- * 用于解决 verifyRunningRef 吞掉后续 SSE 追加图片的问题。
- */
-function sigOf(arr: string[]): string {
-  if (!arr || arr.length === 0) return '';
-  if (arr.length <= 5) return `${arr.length}:${arr.join('|').slice(0, 200)}`;
-  return `${arr.length}:${arr[0]}|${arr[1]}|…|${arr[arr.length - 1]}`;
-}
-
 export default function GalleryCard({ images }: GalleryCardProps) {
-  const safeImages = useMemo(() => (Array.isArray(images) ? images : []), [images]);
+  // http:// → https:// 升级：避免 https 页面下混合内容被浏览器阻止
+  const safeImages = useMemo(() => {
+    if (!Array.isArray(images)) return [];
+    return images
+      .map((src) =>
+        typeof src === 'string' && src.startsWith('http://')
+          ? 'https://' + src.slice(7)
+          : src,
+      )
+      .filter((src) => typeof src === 'string' && src.length > 0);
+  }, [images]);
 
-  // 验证结果 Map：原始 images 数组的 index -> true/false
-  const [verifyMap, setVerifyMap] = useState<Map<number, boolean>>(new Map());
-  // 运行时 onError 捕获的失败 src（兜底：极端情况下预验证通过但实际 <img> 加载失败，如 CDN 切换）
+  // 运行时 onError 捕获的失败 src：失败一张即从 validImages 剔除，后续图片自动补位
   const [failedSrcs, setFailedSrcs] = useState<Set<string>>(new Set());
-  const [verifying, setVerifying] = useState(true);
 
-  // 用签名追踪批次，允许批次变更时重入验证（防止之前的 verifyRunningRef 吞更新）
-  const currentSig = useMemo(() => sigOf(safeImages), [safeImages]);
-  const activeSigRef = useRef<string>('');
-  const activeBatchRef = useRef<Set<number>>(new Set());
-
-  // 对每张图片做预加载验证（images 签名变化时重新验证未验证的 index）
-  useEffect(() => {
-    const sig = currentSig;
-    if (!sig) {
-      setVerifying(false);
-      setVerifyMap(new Map());
-      return;
-    }
-
-    setVerifying(true);
-    // 新批次时清理过时批次的未完成项
-    if (activeSigRef.current !== sig) {
-      activeSigRef.current = sig;
-      activeBatchRef.current = new Set();
-    }
-
-    let cancelled = false;
-    // 找出需要验证的 index（本批次没在跑的，且 verifyMap 里还没结果的）
-    const pendingIdx: number[] = [];
-    safeImages.forEach((src, i) => {
-      if (verifyMap.has(i)) return; // 已有结果跳过
-      if (activeBatchRef.current.has(i)) return; // 本批次已在跑
-      pendingIdx.push(i);
-      activeBatchRef.current.add(i);
-    });
-
-    if (pendingIdx.length === 0) {
-      // 无新增待验证，保留 verifying（直到所有已经在跑的 settle）— 这里简单处理直接关掉 verifying
-      setVerifying(false);
-      return;
-    }
-
-    (async () => {
-      const concurrency = 6;
-      const queue = pendingIdx.slice();
-      const workers: Promise<void>[] = [];
-      const patchMap = new Map<number, boolean>();
-      // 启动并发 worker
-      const spawnWorker = () =>
-        (async () => {
-          while (queue.length > 0) {
-            const idx = queue.shift()!;
-            const src = safeImages[idx];
-            // eslint-disable-next-line no-await-in-loop
-            const ok = await verifyImage(src);
-            if (cancelled) return;
-            // 只接受当前批次的结果（防止旧批次结果回写污染）
-            if (activeSigRef.current !== sig) continue;
-            patchMap.set(idx, ok);
-            // 增量刷新 UI：一张一张推进
-            setVerifyMap((prev) => {
-              const next = new Map(prev);
-              for (const [k, v] of patchMap) next.set(k, v);
-              return next;
-            });
-          }
-        })();
-
-      for (let w = 0; w < concurrency && workers.length < queue.length + workers.length; w++) {
-        workers.push(spawnWorker());
-      }
-      await Promise.all(workers);
-      if (!cancelled && activeSigRef.current === sig) {
-        setVerifying(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSig]);
-
-  // 有效图片 = 预验证通过 且 运行时未出现失败
+  // 有效图片 = 未失败的（不做预验证，直接渲染让浏览器决定能否加载）
   const validImages = useMemo(
-    () =>
-      safeImages.filter(
-        (src, i) => verifyMap.get(i) === true && !failedSrcs.has(src),
-      ),
-    [safeImages, verifyMap, failedSrcs],
+    () => safeImages.filter((src) => !failedSrcs.has(src)),
+    [safeImages, failedSrcs],
   );
 
   const thumbnails = validImages.slice(0, MAX_THUMBNAILS);
   const hiddenCount = Math.max(0, validImages.length - MAX_THUMBNAILS);
+  const hasImages = safeImages.length > 0;
+  const allFailed = hasImages && validImages.length === 0;
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const isLightboxOpen = lightboxIndex !== null;
@@ -201,7 +79,7 @@ export default function GalleryCard({ images }: GalleryCardProps) {
     };
   }, [isLightboxOpen, closeLightbox, showPrev, showNext]);
 
-  // 记录运行时加载失败的 src（兜底：预验证通过但实际渲染失败）
+  // 图片加载失败：加入 failedSrcs，触发重新渲染让后续图片自动补位
   const handleRuntimeError = useCallback((src: string) => {
     setFailedSrcs((prev) => {
       if (prev.has(src)) return prev;
@@ -211,12 +89,8 @@ export default function GalleryCard({ images }: GalleryCardProps) {
     });
   }, []);
 
-  // 没有有效图片（且验证完毕）时不渲染
-  if (!verifying && validImages.length === 0) return null;
-
-  // 验证中的加载骨架位（防止 empty → 突然出现的闪烁；也让用户感知正在筛图）
-  const showSkeleton = verifying && thumbnails.length === 0;
-  const skeletonSlots = Math.min(MAX_THUMBNAILS, safeImages.length || 9);
+  // 无图片数据时不渲染（BentoGrid 的 showGallery 已保证非空，此处防御）
+  if (!hasImages) return null;
 
   return (
     <>
@@ -253,12 +127,6 @@ export default function GalleryCard({ images }: GalleryCardProps) {
         <div className="relative z-10 mt-1 flex items-center justify-between">
           <div className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
             影像档案 · {validImages.length} 张影像
-            {verifying && (
-              <span className="ml-2 inline-flex items-center gap-1 text-violet-400/70">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                筛选中
-              </span>
-            )}
           </div>
         </div>
 
@@ -269,44 +137,43 @@ export default function GalleryCard({ images }: GalleryCardProps) {
 
         {/* 3×3 缩略图网格 */}
         <div className="relative z-10 mt-3 grid grid-cols-3 gap-1.5 flex-1 min-h-[180px]">
-          {/* 验证中：显示骨架位，或已通过验证的图 */}
-          {showSkeleton
-            ? Array.from({ length: skeletonSlots }).map((_, i) => (
-                <div
-                  key={`sk-${i}`}
-                  className="aspect-square overflow-hidden rounded-md border border-violet-500/10 bg-zinc-900/60 skeleton-shimmer"
-                />
-              ))
+          {allFailed
+            ? (
+              <div className="col-span-3 flex flex-col items-center justify-center gap-2 text-zinc-600 py-10">
+                <ImageIcon className="h-8 w-8 opacity-50" />
+                <span className="text-xs font-mono">暂无可用影像</span>
+                <span className="text-[10px] font-mono text-zinc-700">影像源加载失败</span>
+              </div>
+            )
             : thumbnails.map((src, i) => (
-                <button
-                  key={`${src}-${i}`}
-                  type="button"
-                  onClick={() => setLightboxIndex(i)}
-                  title={`查看第 ${i + 1} 张影像`}
-                  className="group relative aspect-square overflow-hidden rounded-md border border-violet-500/15 bg-zinc-900/60 transition-all hover:border-violet-400/60 hover:ring-1 hover:ring-violet-400/40"
-                >
-                  <img
-                    src={src}
-                    alt={`影像 ${i + 1}`}
-                    loading="lazy"
-                    onError={(e) => {
-                      const el = e.currentTarget;
-                      // 双重兜底：隐藏自己 + 同步到 failedSrcs，后续渲染直接剔除
-                      el.style.display = 'none';
-                      handleRuntimeError(src);
-                    }}
-                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                  />
-                  {/* 悬浮遮罩 + 角标 */}
-                  <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/60 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-                  {/* 第 9 张若有更多图片，显示 +N */}
-                  {i === MAX_THUMBNAILS - 1 && hiddenCount > 0 && (
-                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-950/70 text-sm font-mono font-semibold text-violet-200">
-                      +{hiddenCount}
-                    </span>
-                  )}
-                </button>
-              ))}
+              <button
+                key={src}
+                type="button"
+                onClick={() => setLightboxIndex(i)}
+                title={`查看第 ${i + 1} 张影像`}
+                className="group relative aspect-square overflow-hidden rounded-md border border-violet-500/15 bg-zinc-900/60 transition-all hover:border-violet-400/60 hover:ring-1 hover:ring-violet-400/40"
+              >
+                <img
+                  src={src}
+                  alt={`影像 ${i + 1}`}
+                  loading="lazy"
+                  onError={(e) => {
+                    // 立即隐藏 broken image，并加入 failedSrcs 让后续图片补位
+                    e.currentTarget.style.display = 'none';
+                    handleRuntimeError(src);
+                  }}
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                />
+                {/* 悬浮遮罩 + 角标 */}
+                <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/60 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                {/* 第 9 张若有更多图片，显示 +N */}
+                {i === MAX_THUMBNAILS - 1 && hiddenCount > 0 && (
+                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-950/70 text-sm font-mono font-semibold text-violet-200">
+                    +{hiddenCount}
+                  </span>
+                )}
+              </button>
+            ))}
         </div>
 
         {/* 底部说明 */}
@@ -367,9 +234,7 @@ export default function GalleryCard({ images }: GalleryCardProps) {
             src={validImages[lightboxIndex]}
             alt={`影像 ${lightboxIndex + 1}`}
             onClick={(e) => e.stopPropagation()}
-            onError={(e) => {
-              const el = e.currentTarget;
-              el.style.display = 'none';
+            onError={() => {
               handleRuntimeError(validImages[lightboxIndex] ?? '');
             }}
             className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain shadow-2xl shadow-violet-500/10 ring-1 ring-violet-500/20"
