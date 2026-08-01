@@ -9,8 +9,8 @@ import AskPanel from '@/components/AskPanel';
 
 type Severity = 'high' | 'medium' | 'low';
 
-// 每页显示的争议条数
-const CONTROVERSIES_PER_PAGE = 4;
+// 每页显示的争议条数 —— 降低阈值让分页更早出现，保证用户可感知
+const CONTROVERSIES_PER_PAGE = 3;
 
 const SEVERITY: Record<Severity, {
   dot: string;

@@ -16,8 +16,12 @@ function extractHostname(url: string): string {
 
 /** 信源中文名映射（用于构成条展示） */
 const SOURCE_LABELS: Record<string, string> = {
+  searxng: 'SearXNG',
+  serper: 'Serper',
   tavily: 'Tavily',
   exa: 'Exa',
+  duckduckgo: 'DuckDuckGo',
+  openverse: 'Openverse',
   github: 'GitHub',
   news: '新闻',
   social: '社媒',
@@ -25,8 +29,12 @@ const SOURCE_LABELS: Record<string, string> = {
 
 /** 信源颜色映射（构成条分段着色） */
 const SOURCE_COLORS: Record<string, string> = {
+  searxng: 'bg-cyan-500',
+  serper: 'bg-emerald-400',
   tavily: 'bg-emerald-500',
   exa: 'bg-violet-500',
+  duckduckgo: 'bg-orange-500',
+  openverse: 'bg-fuchsia-500',
   github: 'bg-sky-500',
   news: 'bg-amber-500',
   social: 'bg-rose-500',
