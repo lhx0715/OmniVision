@@ -1,4 +1,4 @@
-﻿/**
+/**
  * RRF 多路融合排序（PRD-01 FR-03 第2步）
  *
  * Reciprocal Rank Fusion：多个信源各自返回有序列表，用 RRF 合并。
@@ -19,8 +19,12 @@ const K = 60
 
 /** 默认信源权重（与 getSourceTypeWeight 一致，保留供 registry 兼容引用） */
 export const DEFAULT_SOURCE_WEIGHTS: Record<SourceName, number> = {
+  searxng: 1.0, // 自建元搜索，聚合多源，标准基准
+  serper: 1.0, // Google 真实 SERP，质量高
   tavily: 1.0,
   exa: 1.1, // 语义/研究源略加权
+  duckduckgo: 0.8, // Instant Answer 兜底，覆盖有限略降权
+  openverse: 0, // 纯图片源，不贡献文本 docs，不参与 RRF 融合（仅提供 images）
   github: 1.1, // 代码/官方仓库
   news: 1.2,
   social: 0.6, // 社媒/自媒体低权

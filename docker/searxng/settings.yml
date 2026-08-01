@@ -1,0 +1,63 @@
+# SearXNG 配置 —— 全知视界定制版
+# 继承镜像默认完整引擎配置（use_default_settings），仅覆盖关键项：
+#   1. 开启 JSON 输出格式（适配器必需，默认仅 html）
+#   2. 关闭 limiter / bot protection（允许程序化高频访问）
+#   3. 标记为私有实例（不暴露 /stats、不向公共网络广播）
+#   4. 调整超时与并发
+# 官方文档：https://docs.searxng.org/admin/settings/settings.html
+
+use_default_settings: true
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  # 关闭限流：自建私有实例，供本应用高频调用
+  limiter: false
+  # 关闭 bot 检测：避免程序的 User-Agent 被拦截
+  public_instance: false
+  # 图片代理（影像档案 Gallery 可能用到）
+  image_proxy: true
+  # 方法名改为 method（新版 SearXNG）
+  method: "POST"
+
+search:
+  # 安全搜索关闭（产品覆盖成人/争议话题维度 darkside）
+  safe_search: 0
+  autocomplete: ""
+  # 默认搜索结果语言：中文优先
+  default_lang: "zh-CN"
+  # 关键：开启 JSON 输出，否则 /search?format=json 返回 403
+  formats:
+    - html
+    - json
+
+outgoing:
+  # 上游引擎请求超时（秒）；大会场景略放宽容错
+  request_timeout: 8
+  # 最大并发请求数
+  max_request_timeout: 10
+  useragent_suffix: "OmniVision-Agent"
+
+# 引擎微调：禁用已知不稳定/需登录的引擎，保留高质量通用源
+# （use_default_settings 已启用全部，这里仅按需禁用）
+engines:
+  - name: Google
+    engine: google
+    shortcut: g
+    disabled: false
+  - name: Bing
+    engine: bing
+    shortcut: b
+    disabled: false
+  - name: DuckDuckGo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+  - name: Wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+  - name: Brave
+    engine: brave
+    shortcut: br
+    disabled: false

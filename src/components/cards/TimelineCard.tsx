@@ -1,9 +1,13 @@
-import { Crosshair, X, FileText, Trophy, AlertTriangle, Network, Expand } from 'lucide-react';
+import { useState } from 'react';
+import { Crosshair, X, FileText, Trophy, AlertTriangle, Network, Expand, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useOmniVisionStore, ALL_CARD_TYPES } from '@/store/omnivision';
 import { cn } from '@/lib/utils';
 import type { TimelineCardData, CardType, CardData } from '@/types';
 import { useExpand } from '@/hooks/useCardInteraction';
 import CardExpansion from '@/components/CardExpansion';
+
+// 每页最多显示的事件数（超过则翻页）
+const EVENTS_PER_PAGE = 8;
 
 interface RelatedIntel {
   type: CardType;
@@ -54,8 +58,8 @@ function getRelatedIntel(cards: Partial<Record<CardType, CardData>>): RelatedInt
   if (game && 'stakeholders' in game) {
     result.push({
       type: 'gameplay',
-      label: '博弈',
-      sub: `${game.stakeholders.length} 方博弈`,
+      label: '关系',
+      sub: `${game.stakeholders.length} 方关系网`,
       icon: Network,
       color: 'text-sky-400',
     });
@@ -66,6 +70,14 @@ function getRelatedIntel(cards: Partial<Record<CardType, CardData>>): RelatedInt
 
 export default function TimelineCard({ data }: { data: TimelineCardData }) {
   const events = data.events ?? [];
+
+  // 分页状态：当事件数超过 EVENTS_PER_PAGE 时分页
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(events.length / EVENTS_PER_PAGE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * EVENTS_PER_PAGE;
+  const pageEnd = Math.min(pageStart + EVENTS_PER_PAGE, events.length);
+  const pageEvents = events.slice(pageStart, pageEnd);
 
   const { expand } = useExpand();
   const phase = useOmniVisionStore((s) => s.phase);
@@ -142,12 +154,50 @@ export default function TimelineCard({ data }: { data: TimelineCardData }) {
         </div>
       </div>
 
-      <div className="relative z-10 mt-1 text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
-        核心转折 · {events.length} 节点
-        {hasFocus && (
-          <span className="ml-2 text-sky-400/80 normal-case tracking-normal">
-            · 点击空白处关闭
-          </span>
+      <div className="relative z-10 mt-1 flex items-center justify-between">
+        <div className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
+          核心转折 · {events.length} 节点
+          {hasFocus && (
+            <span className="ml-2 text-sky-400/80 normal-case tracking-normal">
+              · 点击空白处关闭
+            </span>
+          )}
+        </div>
+        {/* 分页指示器 */}
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={safePage === 0}
+              className={cn(
+                'flex h-5 w-5 items-center justify-center rounded border border-sky-500/20 transition-colors',
+                safePage === 0
+                  ? 'text-zinc-700 border-white/5 cursor-not-allowed'
+                  : 'text-sky-300 hover:border-sky-500/40 hover:bg-sky-500/10',
+              )}
+              aria-label="上一页"
+            >
+              <ChevronLeft className="h-3 w-3" />
+            </button>
+            <span className="text-[10px] font-mono tabular-nums text-sky-400/70 min-w-[44px] text-center">
+              {safePage + 1}/{totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={safePage === totalPages - 1}
+              className={cn(
+                'flex h-5 w-5 items-center justify-center rounded border border-sky-500/20 transition-colors',
+                safePage === totalPages - 1
+                  ? 'text-zinc-700 border-white/5 cursor-not-allowed'
+                  : 'text-sky-300 hover:border-sky-500/40 hover:bg-sky-500/10',
+              )}
+              aria-label="下一页"
+            >
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -164,7 +214,8 @@ export default function TimelineCard({ data }: { data: TimelineCardData }) {
         </div>
 
         <div className="flex flex-col gap-5">
-          {events.map((ev, i) => {
+          {pageEvents.map((ev, localI) => {
+            const i = pageStart + localI; // 映射到全局索引
             const isFocused = focusedIndex === i;
             const dim = hasFocus && !isFocused;
             return (

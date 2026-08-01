@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 多信源适配器抽象层（PRD-01 FR-01）
  *
  * 统一各信源差异，使 researchAgent 可按维度 × 实体类型路由到最优信源组合，
@@ -6,7 +6,16 @@
  */
 import type { EntityType } from '@shared/types.js'
 
-export type SourceName = 'tavily' | 'exa' | 'github' | 'news' | 'social'
+export type SourceName =
+  | 'tavily'
+  | 'exa'
+  | 'github'
+  | 'news'
+  | 'social'
+  | 'searxng' // 自建元搜索引擎（无限免费，大会主力源）
+  | 'serper' // Serper.dev（Google SERP，2500次/月免费）
+  | 'duckduckgo' // DuckDuckGo Instant Answer（完全免费兜底）
+  | 'openverse' // Openverse 开放图片搜索（免费无限，影像档案 Gallery 图片源）
 
 export type Dimension =
   | 'verdict'

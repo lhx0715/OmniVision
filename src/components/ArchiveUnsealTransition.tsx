@@ -32,7 +32,7 @@ const DIMENSIONS: { key: string; label: string }[] = [
   { key: 'timeline', label: '时间线' },
   { key: 'achievements', label: '成就' },
   { key: 'darkside', label: '反面' },
-  { key: 'gameplay', label: '博弈' },
+  { key: 'gameplay', label: '关系网' },
 ];
 
 // 思考流时间线条目

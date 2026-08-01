@@ -41,7 +41,7 @@ const CARD_META: Record<string, { icon: typeof Clock; label: string; color: stri
   timeline: { icon: Clock, label: '时间线', color: '#06b6d4' },
   achievements: { icon: Trophy, label: '核心成就', color: '#f59e0b' },
   darkside: { icon: AlertTriangle, label: '反向视角', color: '#f43f5e' },
-  gameplay: { icon: Swords, label: '博弈面', color: '#8b5cf6' },
+  gameplay: { icon: Swords, label: '关系网', color: '#8b5cf6' },
   trends: { icon: TrendingUp, label: '趋势', color: '#22c55e' },
 };
 

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize2, X } from 'lucide-react';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { ChevronLeft, ChevronRight, Image as ImageIcon, Maximize2, X, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface GalleryCardProps {
@@ -9,10 +9,101 @@ interface GalleryCardProps {
 // 缩略图网格最多展示 9 张（3×3），其余通过 lightbox 查看
 const MAX_THUMBNAILS = 9;
 
+/**
+ * 主动验证图片能否加载（避免显示 broken image）
+ * 返回 Promise<boolean>：true = 可加载，false = 失败
+ */
+function verifyImage(src: string, timeoutMs = 8000): Promise<boolean> {
+  return new Promise((resolve) => {
+    // data: 或 blob: URL 默认可用，跳过网络探测
+    if (src.startsWith('data:') || src.startsWith('blob:')) {
+      resolve(true);
+      return;
+    }
+    const img = new Image();
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, timeoutMs);
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+    };
+    img.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(true);
+    };
+    img.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    };
+    img.src = src;
+  });
+}
+
 export default function GalleryCard({ images }: GalleryCardProps) {
-  const [failedIdx, setFailedIdx] = useState<Set<number>>(new Set());
-  // 仅展示未失败的图片（缩略图与 lightbox 都基于该过滤列表）
-  const validImages = images.filter((_, i) => !failedIdx.has(i));
+  // 图片验证状态：null = 验证中，true = 通过，false = 失败
+  const [verifyMap, setVerifyMap] = useState<Map<number, boolean>>(new Map());
+  const [verifying, setVerifying] = useState(true);
+  const verifyRunningRef = useRef(false);
+
+  // 对每张图片做预加载验证（images 变化时重新验证）
+  useEffect(() => {
+    if (!images || images.length === 0) {
+      setVerifying(false);
+      setVerifyMap(new Map());
+      return;
+    }
+    if (verifyRunningRef.current) return;
+    verifyRunningRef.current = true;
+    setVerifying(true);
+
+    let cancelled = false;
+    const nextMap = new Map<number, boolean>();
+
+    (async () => {
+      // 并发验证，限制最大并发数为 6
+      const concurrency = 6;
+      const queue = images.map((src, i) => ({ src, i }));
+      const workers: Promise<void>[] = [];
+      for (let w = 0; w < concurrency && queue.length > 0; w++) {
+        const worker = (async () => {
+          while (queue.length > 0) {
+            const task = queue.shift()!;
+            const ok = await verifyImage(task.src);
+            if (cancelled) return;
+            nextMap.set(task.i, ok);
+            // 增量更新 UI，让验证通过的图尽早出现
+            setVerifyMap(new Map(nextMap));
+          }
+        })();
+        workers.push(worker);
+      }
+      await Promise.all(workers);
+      if (!cancelled) {
+        setVerifyMap(new Map(nextMap));
+        setVerifying(false);
+      }
+      verifyRunningRef.current = false;
+    })();
+
+    return () => {
+      cancelled = true;
+      verifyRunningRef.current = false;
+    };
+  }, [images]);
+
+  // 基于验证结果，筛选出有效图片，并保持原顺序
+  const validImages = (images || []).filter((_, i) => verifyMap.get(i) === true);
+
   const thumbnails = validImages.slice(0, MAX_THUMBNAILS);
   const hiddenCount = Math.max(0, validImages.length - MAX_THUMBNAILS);
 
@@ -59,16 +150,12 @@ export default function GalleryCard({ images }: GalleryCardProps) {
     };
   }, [isLightboxOpen, closeLightbox, showPrev, showNext]);
 
-  const handleImgError = (idx: number) => {
-    setFailedIdx((prev) => {
-      const next = new Set(prev);
-      next.add(idx);
-      return next;
-    });
-  };
+  // 没有有效图片（且验证完毕）时不渲染
+  if (!verifying && validImages.length === 0) return null;
 
-  // 没有有效图片时不渲染
-  if (validImages.length === 0) return null;
+  // 验证中的加载骨架位（防止 empty → 突然出现的闪烁；也让用户感知正在筛图）
+  const showSkeleton = verifying && thumbnails.length === 0;
+  const skeletonSlots = Math.min(MAX_THUMBNAILS, (images || []).length || 9);
 
   return (
     <>
@@ -102,8 +189,16 @@ export default function GalleryCard({ images }: GalleryCardProps) {
           </div>
         </div>
 
-        <div className="relative z-10 mt-1 text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
-          影像档案 · {validImages.length} 张影像
+        <div className="relative z-10 mt-1 flex items-center justify-between">
+          <div className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
+            影像档案 · {validImages.length} 张影像
+            {verifying && (
+              <span className="ml-2 inline-flex items-center gap-1 text-violet-400/70">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                筛选中
+              </span>
+            )}
+          </div>
         </div>
 
         {/* 标题 */}
@@ -113,31 +208,42 @@ export default function GalleryCard({ images }: GalleryCardProps) {
 
         {/* 3×3 缩略图网格 */}
         <div className="relative z-10 mt-3 grid grid-cols-3 gap-1.5 flex-1 min-h-[180px]">
-          {thumbnails.map((src, i) => (
-            <button
-              key={`${src}-${i}`}
-              type="button"
-              onClick={() => setLightboxIndex(i)}
-              title={`查看第 ${i + 1} 张影像`}
-              className="group relative aspect-square overflow-hidden rounded-md border border-violet-500/15 bg-zinc-900/60 transition-all hover:border-violet-400/60 hover:ring-1 hover:ring-violet-400/40"
-            >
-              <img
-                src={src}
-                alt={`影像 ${i + 1}`}
-                loading="lazy"
-                onError={() => handleImgError(i)}
-                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-              />
-              {/* 悬浮遮罩 + 角标 */}
-              <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/60 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-              {/* 第 9 张若有更多图片，显示 +N */}
-              {i === MAX_THUMBNAILS - 1 && hiddenCount > 0 && (
-                <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-950/70 text-sm font-mono font-semibold text-violet-200">
-                  +{hiddenCount}
-                </span>
-              )}
-            </button>
-          ))}
+          {/* 验证中：显示骨架位，或已通过验证的图 */}
+          {showSkeleton
+            ? Array.from({ length: skeletonSlots }).map((_, i) => (
+                <div
+                  key={`sk-${i}`}
+                  className="aspect-square overflow-hidden rounded-md border border-violet-500/10 bg-zinc-900/60 skeleton-shimmer"
+                />
+              ))
+            : thumbnails.map((src, i) => (
+                <button
+                  key={`${src}-${i}`}
+                  type="button"
+                  onClick={() => setLightboxIndex(i)}
+                  title={`查看第 ${i + 1} 张影像`}
+                  className="group relative aspect-square overflow-hidden rounded-md border border-violet-500/15 bg-zinc-900/60 transition-all hover:border-violet-400/60 hover:ring-1 hover:ring-violet-400/40"
+                >
+                  <img
+                    src={src}
+                    alt={`影像 ${i + 1}`}
+                    loading="lazy"
+                    // 兜底 onError：极端情况下再次捕获失败（例如预加载时命中缓存，但 CDN 切换导致）
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                    }}
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  />
+                  {/* 悬浮遮罩 + 角标 */}
+                  <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950/60 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                  {/* 第 9 张若有更多图片，显示 +N */}
+                  {i === MAX_THUMBNAILS - 1 && hiddenCount > 0 && (
+                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-zinc-950/70 text-sm font-mono font-semibold text-violet-200">
+                      +{hiddenCount}
+                    </span>
+                  )}
+                </button>
+              ))}
         </div>
 
         {/* 底部说明 */}
@@ -198,7 +304,9 @@ export default function GalleryCard({ images }: GalleryCardProps) {
             src={validImages[lightboxIndex]}
             alt={`影像 ${lightboxIndex + 1}`}
             onClick={(e) => e.stopPropagation()}
-            onError={() => handleImgError(lightboxIndex)}
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+            }}
             className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain shadow-2xl shadow-violet-500/10 ring-1 ring-violet-500/20"
           />
 

@@ -14,7 +14,7 @@ const META: Record<CardType, { label: string; num: string; accent: string }> = {
   timeline: { label: 'Scanning · 时间线扫描中', num: '02', accent: 'text-sky-500' },
   achievements: { label: 'Extracting · 战绩提取中', num: '03', accent: 'text-emerald-500' },
   darkside: { label: 'Intercepting · 反向截获中', num: '04', accent: 'text-rose-500' },
-  gameplay: { label: 'Mapping · 博弈测绘中', num: '05', accent: 'text-sky-500' },
+  gameplay: { label: 'Mapping · 关系网测绘中', num: '05', accent: 'text-sky-500' },
   trends: { label: 'Projecting · 趋势推演中', num: '06', accent: 'text-amber-500' },
 };
 

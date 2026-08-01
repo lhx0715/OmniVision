@@ -33,7 +33,7 @@ const CARD_META: Array<{
   { type: 'timeline', no: '02', title: 'Timeline', subtitle: '核心时间线' },
   { type: 'achievements', no: '03', title: 'Achievements', subtitle: '硬核战绩' },
   { type: 'darkside', no: '04', title: 'Darkside', subtitle: '反向视角 · 风险预警' },
-  { type: 'gameplay', no: '05', title: 'Gameplay', subtitle: '博弈面 · 利益相关方' },
+  { type: 'gameplay', no: '05', title: 'Network', subtitle: '关系网 · 利益相关方' },
 ];
 
 /** HTML 转义 — 防止内容注入破坏结构 */

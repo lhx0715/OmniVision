@@ -142,7 +142,7 @@ export default function GameplayCard({ data }: { data: GameplayCardData }) {
         <div className="flex items-center gap-2.5">
           <span className="pulse-dot sky inline-block h-2 w-2 rounded-full bg-sky-400" />
           <span className="text-[11px] font-mono uppercase tracking-[0.25em] text-sky-400/90">
-            Gameplay
+            Network
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -160,13 +160,13 @@ export default function GameplayCard({ data }: { data: GameplayCardData }) {
             </button>
           )}
           <span className="classification-stamp text-sky-400 border-sky-500/30">
-            Stakeholders
+            Relations
           </span>
         </div>
       </div>
 
       <div className="relative z-10 mt-1 text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
-        博弈面 · {stakeholders.length} 方{edges.length > 0 ? ` · ${edges.length} 关系` : ''}
+        关系网 · {stakeholders.length} 方{edges.length > 0 ? ` · ${edges.length} 关系` : ''}
       </div>
 
       {/* 关系网络图 SVG */}

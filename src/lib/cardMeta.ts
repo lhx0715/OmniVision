@@ -25,7 +25,7 @@ export const CARD_META: Record<CardType, { label: string; color: string; icon: s
   achievements: { label: '核心战绩', color: 'amber', icon: 'A' },
   trends: { label: '趋势数据', color: 'sky', icon: 'D' },
   darkside: { label: '暗面档案', color: 'rose', icon: 'X' },
-  gameplay: { label: '博弈关系', color: 'violet', icon: 'G' },
+  gameplay: { label: '关系网络', color: 'violet', icon: 'N' },
 };
 
 /** 实体类型中文标签 */

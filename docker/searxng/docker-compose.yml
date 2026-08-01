@@ -1,0 +1,55 @@
+# SearXNG 自建元搜索引擎 —— 全知视界大会主力搜索源
+# 完全免费 · 无限调用 · 聚合 70+ 搜索引擎（Google/Bing/DuckDuckGo/Wikipedia...）
+#
+# 启动：
+#   cd docker/searxng
+#   docker compose up -d
+# 验证：
+#   curl "http://localhost:8080/search?q=test&format=json" | head -c 200
+# 停止：
+#   docker compose down
+#
+# 启动后在项目根目录 .env 中设置：
+#   SEARXNG_URL=http://localhost:8080
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: omnivision-searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # 只读挂载自定义配置：开启 JSON 输出 + 关闭限流（允许程序化访问）
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - UWSGI_WORKERS=4
+      - UWSGI_THREADS=4
+    # 安全加固
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    # 大会高并发场景的资源限制（可按服务器配置调整）
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://localhost:8080/healthz",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
