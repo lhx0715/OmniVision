@@ -59,16 +59,25 @@ export default function FolderSelectDialog({ onClose, onConfirm }: FolderSelectD
   }, [onClose]);
 
   // 创建新文件夹
+  //
+  // 健壮性要点：
+  //   - AbortController 超时（25s）：线上 Vercel serverless 冷启动 + Supabase 连接建立慢时，
+  //     请求可能长时间 pending，表现为"既不出现文件夹也不报错"的无限转圈。
+  //     超时后明确提示，避免用户误以为已创建。
+  //   - 创建进行中由调用方禁用"确认归档"按钮，防止文件夹未创建完成就归档到错误目标（未分类）。
   const handleCreate = async () => {
     const name = newName.trim();
     if (!name || creatingLoading) return;
     setCreatingLoading(true);
     setError(null);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     try {
       const res = await authFetch('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -79,9 +88,15 @@ export default function FolderSelectDialog({ onClose, onConfirm }: FolderSelectD
       } else {
         setError(data.error || '创建失败');
       }
-    } catch {
-      setError('网络异常，请重试');
+    } catch (err: unknown) {
+      const errName = (err as { name?: string })?.name;
+      if (errName === 'AbortError') {
+        setError('创建超时，服务器响应过慢，请重试');
+      } else {
+        setError('网络异常，请重试');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setCreatingLoading(false);
     }
   };
@@ -232,10 +247,25 @@ export default function FolderSelectDialog({ onClose, onConfirm }: FolderSelectD
               <button
                 type="button"
                 onClick={() => onConfirm(selectedId)}
-                className="flex-[2] flex items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-mono text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-500/50 transition-all tracking-wider uppercase"
+                disabled={creatingLoading}
+                className={cn(
+                  'flex-[2] flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-xs font-mono transition-all tracking-wider uppercase',
+                  creatingLoading
+                    ? 'border-white/10 bg-white/[0.02] text-zinc-600 cursor-not-allowed'
+                    : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-500/50',
+                )}
               >
-                <FolderInput className="h-3.5 w-3.5" />
-                确认归档
+                {creatingLoading ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    正在创建文件夹...
+                  </span>
+                ) : (
+                  <>
+                    <FolderInput className="h-3.5 w-3.5" />
+                    确认归档
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -65,6 +65,8 @@ export interface TrendSeries {
 }
 export interface TrendCardData {
   trends: TrendSeries[];
+  xLabel?: string;  // 横轴含义，如"年份"、"季度"、"月份"、"阶段"
+  yLabel?: string;  // 纵轴含义含单位，如"交付量(万辆)"、"营收(亿美元)"、"指数"
 }
 
 export type CardData =

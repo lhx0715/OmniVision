@@ -77,9 +77,9 @@ const AchievementsSchema = z
           })
           .passthrough(),
       )
-      .min(1)
-      .max(8)
-      .describe('1-8个硬核战绩'),
+      .min(6)
+      .max(12)
+      .describe('6-12个硬核战绩：必须覆盖规模、营收、排名、市场份额、用户量、产能、增速等多维硬指标，数量必须充足以支持多页展示，不得少于6条'),
   })
   .passthrough()
 
@@ -136,6 +136,8 @@ const GameplaySchema = z
 
 const TrendSchema = z
   .object({
+    xLabel: z.string().describe('横轴含义，如"年份"、"季度"、"月份"、"阶段"'),
+    yLabel: z.string().describe('纵轴含义含单位，如"交付量(万辆)"、"营收(亿美元)"、"指数"'),
     trends: z
       .array(
         z
@@ -379,23 +381,44 @@ function normalizeGameplay(v: any): GameplayCardData {
   return result
 }
 
+/** 根据时间标签推断横轴含义 */
+function inferXLabel(pts: { x: string }[]): string {
+  if (!pts.length) return ''
+  if (pts.every((p) => /^\d{4}$/.test(p.x))) return '年份'
+  if (pts.every((p) => /^\d{4}-Q[1-4]$/.test(p.x))) return '季度'
+  if (pts.every((p) => /^\d{4}-\d{2}$/.test(p.x))) return '月份'
+  if (pts.every((p) => /^\d{4}-\d{2}-\d{2}$/.test(p.x))) return '日期'
+  return ''
+}
+
 function normalizeTrends(v: any): TrendCardData {
-  const trends = Array.isArray(v?.trends) ? v.trends : []
-  return {
-    trends: trends
-      .map((t: any) => ({
-        label: typeof t?.label === 'string' ? t.label : '',
-        points: Array.isArray(t?.points)
-          ? t.points
-              .map((p: any) => ({
-                x: typeof p?.x === 'string' ? p.x : p?.x != null ? String(p.x) : '',
-                y: typeof p?.y === 'number' ? p.y : typeof p?.y === 'string' ? Number(p.y) || 0 : 0,
-              }))
-              .filter((p: { x: string }) => p.x !== '')
-          : [],
-      }))
-      .filter((t: { label: string; points: unknown[] }) => t.label && t.points.length >= 2),
-  }
+  const trends = (Array.isArray(v?.trends) ? v.trends : [])
+    .map((t: any) => ({
+      label: typeof t?.label === 'string' ? t.label : '',
+      points: Array.isArray(t?.points)
+        ? t.points
+            .map((p: any) => ({
+              x: typeof p?.x === 'string' ? p.x : p?.x != null ? String(p.x) : '',
+              y: typeof p?.y === 'number' ? p.y : typeof p?.y === 'string' ? Number(p.y) || 0 : 0,
+            }))
+            .filter((p: { x: string }) => p.x !== '')
+        : [],
+    }))
+    .filter((t: { label: string; points: unknown[] }) => t.label && t.points.length >= 2)
+
+  const allPoints = trends.flatMap((t: { points: { x: string }[] }) => t.points)
+  const xLabel =
+    typeof v?.xLabel === 'string' && v.xLabel.trim() ? v.xLabel.trim() : inferXLabel(allPoints)
+  const yLabel =
+    typeof v?.yLabel === 'string' && v.yLabel.trim()
+      ? v.yLabel.trim()
+      : trends.length === 1
+        ? trends[0].label
+        : trends.length > 1
+          ? '数值'
+          : ''
+
+  return { trends, xLabel, yLabel }
 }
 
 /**
@@ -411,9 +434,9 @@ ${searchContext || '（无搜索资料，基于你的知识库生成）'}
 1. **结果指向**：不讲废话，直接剥离修饰词，提炼硬核数据。
 2. **反向视角**（强制）：必须在 darkside 中揭示争议、硬伤、槽点、利益博弈。看对立面比看正面荣誉更能抓到本质。**controversies 至少返回 4 条，最多 12 条，不得少于 4 条。应覆盖争议、失败、投诉、法律、道德、财务、产品硬伤等多维角度，不能只有3条。**
 3. **零废话**：禁止输出"基于您的要求""综上所述""希望对您有帮助"等任何污染 UI 的词汇。
-4. **数据优先**：achievements 必须包含可量化的硬核指标（金额、数量、排名、百分比）。
+4. **数据优先**（强制）：achievements 必须包含可量化的硬核指标（金额、数量、排名、百分比）。**items 至少返回 6 条，最多 12 条，不得少于 6 条。**应覆盖规模、营收、市值、排名、市场份额、用户量、产能、增速、专利、奖项等多维硬指标，不能只返回 2-3 条草草了事。
 5. **博弈视角**：gameplay 必须揭示各方利益诉求与底层逻辑，不是简单罗列。
-6. **趋势数据**（可选）：trends 中提取可量化的时间序列数据（如年度交付量、营收、用户增长）。如果目标无明确量化趋势数据，返回空数组 trends: []。
+6. **趋势数据**（可选）：trends 中提取可量化的时间序列数据（如年度交付量、营收、用户增长）。如果目标无明确量化趋势数据，返回空数组 trends: []。**当返回趋势数据时，必须同时给出 xLabel（横轴含义，如"年份"、"季度"）和 yLabel（纵轴含义含单位，如"交付量(万辆)"、"营收(亿美元)"），用于坐标轴标注；trends 为空时 xLabel/yLabel 可省略。**
 7. **博弈关系**：gameplay.relations 中列出 stakeholder 之间的关系（竞争/合作/监管/依赖/对立等）。
 8. **时间线数量**（强制）：timeline.events **至少返回 8 条，最多 20 条**。尽可能覆盖起点、成长、关键转折、巅峰、挫折、现状等所有重要节点，不能只返回 3-4 条草草了事。信息源越丰富，时间线越要丰满。
 
@@ -425,7 +448,7 @@ ${searchContext || '（无搜索资料，基于你的知识库生成）'}
   "achievements": { "items": [{ "metric": "数据", "label": "名称", "context": "背景" }] },
   "darkside": { "controversies": [{ "title": "争议标题", "detail": "事实", "severity": "high|medium|low" }] },
   "gameplay": { "stakeholders": [{ "name": "名称", "position": "角色", "interest": "利益" }], "dynamics": "底层逻辑", "relations": [{ "from": "名称", "to": "名称", "relation": "竞争" }] },
-  "trends": { "trends": [{ "label": "趋势名", "points": [{ "x": "2020", "y": 100 }] }] }
+  "trends": { "xLabel": "年份", "yLabel": "交付量(万辆)", "trends": [{ "label": "趋势名", "points": [{ "x": "2020", "y": 100 }] }] }
 }`
 }
 

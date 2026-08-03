@@ -1,4 +1,10 @@
+import { useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { AchievementsCardData } from '@/types';
+
+// 每页显示的硬指标数（2 列网格，4 条 = 2 行，保证翻页体验）
+const ACHIEVEMENTS_PER_PAGE = 4;
 
 /** 从 metric 字符串中尝试提取数值用于条形图相对长度 */
 function extractMagnitude(metric: string): number {
@@ -13,6 +19,14 @@ function extractMagnitude(metric: string): number {
 
 export default function AchievementsCard({ data }: { data: AchievementsCardData }) {
   const items = data.items ?? [];
+
+  // 分页状态：当硬指标数超过 ACHIEVEMENTS_PER_PAGE 时分页
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(items.length / ACHIEVEMENTS_PER_PAGE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * ACHIEVEMENTS_PER_PAGE;
+  const pageEnd = Math.min(pageStart + ACHIEVEMENTS_PER_PAGE, items.length);
+  const pageItems = items.slice(pageStart, pageEnd);
 
   return (
     <div className="dossier-card corner-brackets rounded-2xl border border-emerald-500/15 p-6 h-full flex flex-col relative
@@ -34,15 +48,58 @@ export default function AchievementsCard({ data }: { data: AchievementsCardData 
         </span>
       </div>
 
+      {/* 硬指标标题 + 分页 */}
+      <div className="relative z-10 mt-4 flex items-center justify-between">
+        <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-zinc-600">
+          Hard Metrics · {items.length} 项
+        </div>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={safePage === 0}
+              className={cn(
+                'flex h-5 w-5 items-center justify-center rounded border border-emerald-500/20 transition-colors',
+                safePage === 0
+                  ? 'text-zinc-700 border-white/5 cursor-not-allowed'
+                  : 'text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10',
+              )}
+              aria-label="上一页"
+            >
+              <ChevronLeft className="h-3 w-3" />
+            </button>
+            <span className="text-[10px] font-mono tabular-nums text-emerald-400/70 min-w-[44px] text-center">
+              {safePage + 1}/{totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={safePage === totalPages - 1}
+              className={cn(
+                'flex h-5 w-5 items-center justify-center rounded border border-emerald-500/20 transition-colors',
+                safePage === totalPages - 1
+                  ? 'text-zinc-700 border-white/5 cursor-not-allowed'
+                  : 'text-emerald-300 hover:border-emerald-500/40 hover:bg-emerald-500/10',
+              )}
+              aria-label="下一页"
+            >
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* 数据条形图主体 */}
-      <div className="relative z-10 mt-5 flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 content-start">
-        {items.map((item, i) => {
+      <div className="relative z-10 mt-4 flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 content-start">
+        {pageItems.map((item, localI) => {
+          const i = pageStart + localI; // 映射到全局编号
           const magnitude = extractMagnitude(item.metric);
           return (
             <div
               key={`${item.label}-${i}`}
               className="group animate-fade-in-up"
-              style={{ animationDelay: `${i * 100}ms` }}
+              style={{ animationDelay: `${localI * 100}ms` }}
             >
               {/* 指标编号 + 大号数值 */}
               <div className="flex items-baseline gap-2">
@@ -59,7 +116,7 @@ export default function AchievementsCard({ data }: { data: AchievementsCardData 
               <div className="mt-2 h-1 w-full rounded-full bg-white/5 overflow-hidden">
                 <div
                   className="data-bar-fill h-full rounded-full bg-gradient-to-r from-emerald-500/60 to-emerald-300"
-                  style={{ width: `${magnitude}%`, animationDelay: `${i * 100 + 200}ms` }}
+                  style={{ width: `${magnitude}%`, animationDelay: `${localI * 100 + 200}ms` }}
                 />
               </div>
               {/* 刻度 */}
@@ -83,7 +140,7 @@ export default function AchievementsCard({ data }: { data: AchievementsCardData 
       {/* 底部汇总条 */}
       <div className="relative z-10 mt-4 pt-3 border-t border-white/5 flex items-center justify-between">
         <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-600">
-          Σ {items.length} 项硬指标
+          Σ {items.length} 项硬指标{totalPages > 1 && ` · 第 ${safePage + 1}/${totalPages} 页`}
         </span>
         <div className="flex items-center gap-1">
           {Array.from({ length: 8 }).map((_, i) => {

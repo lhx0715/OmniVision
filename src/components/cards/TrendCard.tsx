@@ -11,6 +11,16 @@ function fmt(n: number): string {
   return String(Math.round(n * 10) / 10);
 }
 
+/** 横轴含义兜底推断：根据时间标签格式判断 */
+function inferXAxisLabel(xs: string[]): string {
+  if (!xs.length) return '';
+  if (xs.every((x) => /^\d{4}$/.test(x))) return '年份';
+  if (xs.every((x) => /^\d{4}-Q[1-4]$/.test(x))) return '季度';
+  if (xs.every((x) => /^\d{4}-\d{2}$/.test(x))) return '月份';
+  if (xs.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x))) return '日期';
+  return '';
+}
+
 interface PlotPoint {
   px: number;
   py: number;
@@ -32,7 +42,7 @@ export default function TrendCard({ data }: { data: TrendCardData }) {
   // ===== 坐标系计算 =====
   const VW = 360;
   const VH = 210;
-  const PAD = { l: 46, r: 16, t: 18, b: 34 };
+  const PAD = { l: 56, r: 16, t: 18, b: 44 };
   const plotX0 = PAD.l;
   const plotX1 = VW - PAD.r;
   const plotY0 = PAD.t;
@@ -51,6 +61,12 @@ export default function TrendCard({ data }: { data: TrendCardData }) {
   if (allNumeric && allX.length > 1) {
     allX.sort((a, b) => parseFloat(a) - parseFloat(b));
   }
+
+  // 坐标轴说明（后端提供，缺失时按数据格式兜底推断）
+  const xLabel = data.xLabel?.trim() || inferXAxisLabel(allX);
+  const yLabel =
+    data.yLabel?.trim() ||
+    (series.length === 1 ? series[0].label : series.length > 1 ? '数值' : '');
 
   // Y 轴范围
   const allY = series.flatMap((s) => s.points.map((p) => p.y));
@@ -159,6 +175,20 @@ export default function TrendCard({ data }: { data: TrendCardData }) {
             );
           })}
 
+          {/* Y 轴标题（纵轴含义） */}
+          {yLabel && (
+            <text
+              x={12}
+              y={(plotY0 + plotY1) / 2}
+              textAnchor="middle"
+              transform={`rotate(-90 12 ${(plotY0 + plotY1) / 2})`}
+              className="fill-zinc-500"
+              style={{ fontSize: '8px', fontFamily: 'monospace', letterSpacing: '0.05em' }}
+            >
+              {yLabel}
+            </text>
+          )}
+
           {/* X 轴线 */}
           <line x1={plotX0} y1={plotY1} x2={plotX1} y2={plotY1} stroke="#ffffff" strokeOpacity="0.1" strokeWidth="0.6" />
 
@@ -178,6 +208,19 @@ export default function TrendCard({ data }: { data: TrendCardData }) {
               </text>
             );
           })}
+
+          {/* X 轴标题（横轴含义） */}
+          {xLabel && (
+            <text
+              x={(plotX0 + plotX1) / 2}
+              y={VH - 4}
+              textAnchor="middle"
+              className="fill-zinc-500"
+              style={{ fontSize: '8px', fontFamily: 'monospace', letterSpacing: '0.05em' }}
+            >
+              {xLabel}
+            </text>
+          )}
 
           {/* 趋势线 + 数据点 */}
           {plots.map((pl, si) => (

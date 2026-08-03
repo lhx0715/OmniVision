@@ -58,7 +58,7 @@ export default function SearchBar({ active, onSubmit }: SearchBarProps) {
         <input
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={active ? '继续侦察...' : '输入任意人、事、物，3秒获取全景情报...'}
+          placeholder={active ? '继续侦察...' : '输入任意人、事、物，快速获取全景情报...'}
           className="flex-1 bg-transparent outline-none text-zinc-100 placeholder:text-zinc-500 font-sans text-base"
           aria-label="搜索查询"
           autoFocus={!active}

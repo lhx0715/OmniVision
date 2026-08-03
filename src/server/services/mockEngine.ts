@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Mock 情报引擎
  * 根据查询内容生成 5 种情报卡片的模拟数据
  */
@@ -497,7 +497,7 @@ function buildGenericTrends(query: string, entityType: EntityType): TrendCardDat
       { label: `${subject} 市场渗透率(%)`, points: [{ x: '诞生', y: 2 }, { x: '迭代', y: 12 }, { x: '扩张', y: 38 }, { x: '当下', y: 55 }] },
     ],
   )
-  return { trends }
+  return { trends, xLabel: '阶段', yLabel: '数值' }
 }
 
 function buildGenericProfile(query: string, entityType: EntityType): EntityProfile {
@@ -513,13 +513,33 @@ function buildGenericProfile(query: string, entityType: EntityType): EntityProfi
 
 // ============== 主入口 ==============
 
+/** 补全趋势卡片的坐标轴说明（知识库条目可能未带，按数据格式推断） */
+function ensureTrendAxes(t: TrendCardData): TrendCardData {
+  if (!t || t.trends.length === 0) return t
+  const allPoints = t.trends.flatMap((s) => s.points)
+  let xLabel = t.xLabel && t.xLabel.trim() ? t.xLabel.trim() : ''
+  if (!xLabel) {
+    if (allPoints.every((p) => /^\d{4}$/.test(p.x))) xLabel = '年份'
+    else if (allPoints.every((p) => /^\d{4}-Q[1-4]$/.test(p.x))) xLabel = '季度'
+    else if (allPoints.every((p) => /^\d{4}-\d{2}$/.test(p.x))) xLabel = '月份'
+  }
+  let yLabel = t.yLabel && t.yLabel.trim() ? t.yLabel.trim() : ''
+  if (!yLabel) {
+    yLabel = t.trends.length === 1 ? t.trends[0].label : '数值'
+  }
+  return { trends: t.trends, xLabel, yLabel }
+}
+
 function resolveProfile(query: string, entityType: EntityType): EntityProfile {
   const q = query.toLowerCase().trim()
   // 精确匹配知识库（按 key 包含关系）
   for (const key of Object.keys(KNOWLEDGE_BASE)) {
     const entry = KNOWLEDGE_BASE[key]
     if (entry.entityType === entityType && q.includes(key.toLowerCase())) {
-      return entry.profile
+      const profile = entry.profile
+      // 知识库条目可能未带坐标轴说明，按数据补全（幂等）
+      profile.trends = ensureTrendAxes(profile.trends)
+      return profile
     }
   }
   // 兜底：动态拼装
